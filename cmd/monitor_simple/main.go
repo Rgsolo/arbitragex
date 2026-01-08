@@ -18,12 +18,17 @@ import (
 )
 
 var (
-	// 测试币种列表（先用主流币种验证系统）
+	// 小币种列表（高波动性，更容易观察到价差）
 	symbols = []string{
-		"BTC/USDT",   // Bitcoin
-		"ETH/USDT",   // Ethereum
+		"PEPE/USDT",  // Pepe 币，波动极大
+		"SHIB/USDT",  // Shiba Inu，波动极大
+		"FLOKI/USDT", // Floki，波动极大
+		"BONK/USDT",  // Bonk，波动极大
+		"WIF/USDT",   // dogwifhat，波动极大
+		// 主流币种用于对比
 		"DOGE/USDT",  // Dogecoin
 		"ADA/USDT",   // Cardano
+		"DOT/USDT",   // Polkadot
 	}
 
 	// 交易所列表

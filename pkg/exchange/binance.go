@@ -385,26 +385,44 @@ func (b *BinanceAdapter) handleTickerMessage(data map[string]interface{}) error 
 }
 
 // formatBinanceSymbol 格式化 Binance 交易对符号
-// Binance 使用小写格式（btcusdt），我们需要转换为标准格式（BTC/USDT）
+// Binance 使用大写格式（PEPEUSDT），我们需要转换为标准格式（PEPE/USDT）
 func formatBinanceSymbol(symbol string) string {
-	// BTCUSDT -> BTC/USDT
 	symbol = strings.ToUpper(symbol)
 
-	// 常见交易对格式化
-	if len(symbol) >= 6 {
-		if len(symbol) == 6 {
-			// ETHBTC -> ETH/BTC (3+3)
-			base := symbol[:3]
-			quote := symbol[3:]
-			return base + "/" + quote
-		} else if len(symbol) == 7 || len(symbol) == 8 {
-			// BTCUSDT -> BTC/USDT (3+4 或 3+5)
-			base := symbol[:3]
-			quote := symbol[3:]
-			return base + "/" + quote
+	// 常见报价币（按长度降序排列，优先匹配更长的）
+	quoteCurrencies := []string{
+		"USDT", "USDC", "BUSD",  // 稳定币（4字符）
+		"BTC", "ETH", "BNB",     // 主流币（3字符）
+	}
+
+	// 尝试匹配报价币
+	for _, quote := range quoteCurrencies {
+		if strings.HasSuffix(symbol, quote) {
+			base := symbol[:len(symbol)-len(quote)]
+			if len(base) > 0 {
+				return base + "/" + quote
+			}
 		}
 	}
 
+	// 如果无法匹配，尝试使用常见的 3+3 或 3+4 或 4+4 格式
+	if len(symbol) == 6 {
+		// ETHBTC -> ETH/BTC (3+3)
+		return symbol[:3] + "/" + symbol[3:]
+	} else if len(symbol) == 7 {
+		// BTCUSDT -> BTC/USDT (3+4)
+		return symbol[:3] + "/" + symbol[3:]
+	} else if len(symbol) == 8 {
+		// 可能是 4+4 (PEPEUSDT -> PEPE/USDT)
+		// 也可能是 3+5 (假设很少见)
+		// 优先尝试 4+4
+		return symbol[:4] + "/" + symbol[4:]
+	} else if len(symbol) == 9 {
+		// 5+4 (FLOKIUSDT -> FLOKI/USDT)
+		return symbol[:5] + "/" + symbol[4:]
+	}
+
+	// 无法解析，返回原符号
 	return symbol
 }
 
