@@ -1,0 +1,154 @@
+version: '3.8'
+
+services:
+  # MySQL 数据库
+  mysql:
+    image: mysql:8.0
+    container_name: arbitragex-mysql
+    restart: always
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: arbitragex
+      MYSQL_USER: arbitragex_user
+      MYSQL_PASSWORD: ArbitrageX2025!
+      TZ: Asia/Shanghai
+    volumes:
+      # 数据持久化
+      - ./data/mysql:/var/lib/mysql
+      # 初始化脚本
+      - ./scripts/mysql:/docker-entrypoint-initdb.d
+      # 配置文件
+      - ./config/mysql.cnf:/etc/mysql/conf.d/custom.cnf
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    networks:
+      - arbitragex-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Redis 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: arbitragex-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - arbitragex-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ArbitrageX 应用（价格监控服务）
+  price-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile.price
+    container_name: arbitragex-price-monitor
+    restart: always
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # 环境变量
+      - ENV=production
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_DATABASE=arbitragex
+      - MYSQL_USER=arbitragex_user
+      - MYSQL_PASSWORD=ArbitrageX2025!
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      # 配置文件
+      - ./config:/app/config
+      # 日志文件
+      - ./logs:/app/logs
+    networks:
+      - arbitragex-network
+    ports:
+      - "8888:8888"
+
+  # ArbitrageX 应用（套利引擎服务）
+  arbitrage-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile.engine
+    container_name: arbitragex-arbitrage-engine
+    restart: always
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      price-monitor:
+        condition: service_started
+    environment:
+      - ENV=production
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_DATABASE=arbitragex
+      - MYSQL_USER=arbitragex_user
+      - MYSQL_PASSWORD=ArbitrageX2025!
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - ./config:/app/config
+      - ./logs:/app/logs
+    networks:
+      - arbitragex-network
+    ports:
+      - "8889:8889"
+
+  # ArbitrageX 应用（交易执行服务）
+  trade-executor:
+    build:
+      context: .
+      dockerfile: Dockerfile.trade
+    container_name: arbitragex-trade-executor
+    restart: always
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      arbitrage-engine:
+        condition: service_started
+    environment:
+      - ENV=production
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_DATABASE=arbitragex
+      - MYSQL_USER=arbitragex_user
+      - MYSQL_PASSWORD=ArbitrageX2025!
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - ./config:/app/config
+      - ./logs:/app/logs
+    networks:
+      - arbitragex-network
+    ports:
+      - "8890:8890"
+
+networks:
+  arbitragex-network:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  redis-data:

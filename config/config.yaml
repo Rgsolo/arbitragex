@@ -1,0 +1,63 @@
+# ArbitrageX 配置文件
+# 本文件为配置模板，实际部署时需要根据环境调整
+
+Name: arbitragex
+Host: 0.0.0.0
+Port: 8888
+
+# 日志配置
+Log:
+  # 服务名称
+  ServiceName: arbitragex
+  # 日志级别：debug, info, error
+  Level: info
+  # 编码方式：json, plain
+  Encoding: json
+  # 日志路径
+  Path: logs
+  # 日志保留天数
+  KeepDays: 7
+  # 是否压缩日志
+  Compress: true
+
+# MySQL 数据库配置
+MySQL:
+  # 数据源连接字符串
+  # 格式：user:password@tcp(host:port)/dbname?charset=utf8mb4&parseTime=true
+  DataSource: arbitragex_user:ArbitrageX2025!@tcp(localhost:3306)/arbitragex?charset=utf8mb4&parseTime=true&loc=Asia%2FShanghai
+
+# Redis 缓存配置
+Redis:
+  # Redis 主机地址
+  Host: localhost:6379
+  # 连接类型：0=单节点, 1=哨兵, 2=集群
+  Type: 0
+  # Redis 密码（如果有的话）
+  Pass: ""
+
+# 交易所配置
+Exchanges:
+  # Binance 配置
+  - Name: binance
+    Type: cex
+    APIKey: your_api_key_here
+    APISecret: your_api_secret_here
+    WebSocketBaseURL: wss://stream.binance.com:9443
+    RESTBaseURL: https://api.binance.com
+    Enabled: true
+
+  # OKX 配置
+  - Name: okx
+    Type: cex
+    APIKey: your_api_key_here
+    APISecret: your_api_secret_here
+    WebSocketBaseURL: wss://ws.okx.com:8443
+    RESTBaseURL: https://www.okx.com
+    Enabled: true
+
+  # Uniswap 配置（DEX）
+  - Name: uniswap
+    Type: dex
+    WebSocketBaseURL: wss://ethereum.publicnode.com
+    RESTBaseURL: https://ethereum.publicnode.com
+    Enabled: false

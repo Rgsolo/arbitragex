@@ -305,16 +305,27 @@ database:
   # 是否启用数据库
   enabled: false
 
-  # PostgreSQL 配置
-  postgres:
+  # MySQL 配置
+  mysql:
     host: "localhost"
-    port: 5432
-    user: "arbitragex"
+    port: 3306
+    user: "arbitragex_user"
     database: "arbitragex"
-    ssl_mode: "disable"
+    charset: "utf8mb4"
+    parse_time: true
+    loc: "Local"
     max_open_conns: 25
     max_idle_conns: 5
     conn_max_lifetime: 300  # seconds
+
+  # Redis 配置（可选）
+  redis:
+    host: "localhost"
+    port: 6379
+    password: ""
+    database: 0
+    pool_size: 10
+    min_idle_conns: 5
 
 # 仪表板配置
 dashboard:
@@ -442,6 +453,256 @@ alerts:
     enabled: true
 ```
 
+### 3.4 go-zero 框架配置 (config.yaml)
+
+go-zero 框架使用 YAML 配置文件，以下是基于 go-zero 的完整配置示例：
+
+```yaml
+# ============================================
+# ArbitrageX go-zero 框架配置
+# ============================================
+
+# 服务配置（go-zero 内置）
+Name: arbitragex-price-monitor
+Host: 0.0.0.0
+Port: 8888
+
+# 超时配置
+Timeout: 30
+
+# 数据库配置
+Mysql:
+  DataSource: arbitragex_user:ENCRYPTED_PASSWORD@tcp(localhost:3306)/arbitragex?charset=utf8mb4&parseTime=true&loc=Local
+
+# Redis 配置（可选）
+Redis:
+  Host: localhost:6379
+  Type: node
+  Pass: ENCRYPTED_PASSWORD
+
+# 日志配置
+Log:
+  ServiceName: arbitragex-price-monitor
+  Mode: console
+  Level: info
+  Encoding: json
+  Path: logs
+  KeepDays: 7
+  Compress: true
+
+# Prometheus 监控配置
+Prometheus:
+  Host: 0.0.0.0
+  Port: 9091
+  Path: /metrics
+
+# 业务配置（自定义）
+Business:
+  # 运行环境
+  Env: prod
+
+  # 价格监控配置
+  PriceMonitor:
+    UpdateInterval: 100  # 毫秒
+    DataExpire: 5        # 秒
+
+  # 交易所配置
+  Exchanges:
+    - Name: binance
+      Enabled: true
+      Priority: 1
+      RestAPI: "https://api.binance.com"
+      WSAPI: "wss://stream.binance.com:9443"
+      RateLimit:
+        RestPerMinute: 1200
+        OrderPer10Sec: 100
+        WSConnections: 5
+      # API 密钥（从 secrets 加载）
+      APIKey: ""
+      APISecret: ""
+
+    - Name: okx
+      Enabled: true
+      Priority: 2
+      RestAPI: "https://www.okx.com"
+      WSAPI: "wss://ws.okx.com:8443/ws/v5/public"
+      RateLimit:
+        RestPerMinute: 600
+        OrderPer2Sec: 20
+        WSConnections: 3
+
+  # 交易对配置
+  Symbols:
+    - Symbol: BTC/USDT
+      Enabled: true
+      MinProfitRate: 0.005
+      MinAmount: 10
+      MaxAmount: 1000
+      PricePrecision: 2
+      AmountPrecision: 8
+
+    - Symbol: ETH/USDT
+      Enabled: true
+      MinProfitRate: 0.005
+      MinAmount: 10
+      MaxAmount: 1000
+
+  # 风险控制配置
+  Risk:
+    MaxSingleAmount: 1000
+    MinSingleAmount: 10
+    MaxDailyAmount: 10000
+    MaxDailyCount: 50
+    MaxExchangeRatio: 0.3
+    MinExchangeBalance: 100
+    MaxSingleLoss: 50
+    MaxDailyLoss: 200
+    MinProfitRate: 0.005
+    EnableCircuitBreaker: true
+    ConsecutiveFailures: 5
+    AutoRestartAfter: 300
+    MaxSlippage: 0.005
+
+  # 套利配置
+  Arbitrage:
+    CheckInterval: 50
+    MaxOpportunities: 100
+
+  # 交易执行配置
+  Trade:
+    OrderTimeout: 30
+    MaxConcurrentTrades: 5
+    MaxRetries: 3
+    RetryInterval: 500
+```
+
+### 3.5 go-zero 服务上下文配置
+
+```go
+// internal/config/config.go
+package config
+
+import "github.com/zeromicro/go-zero/zrpc"
+
+type Config struct {
+    // go-zero 内置配置
+    rest.RestConf `json:",inline"`
+
+    // 数据库配置
+    Mysql struct {
+        DataSource string `json:",default=arbitragex_user:password@tcp(localhost:3306)/arbitragex?charset=utf8mb4&parseTime=true&loc=Local"`
+    } `json:",optional"`
+
+    // Redis 配置
+    Redis struct {
+        Host string `json:",default=localhost:6379"`
+        Type string `json:",default=node"`
+        Pass string `json:",optional"`
+    } `json:",optional"`
+
+    // 业务配置
+    Business struct {
+        Env string `json:",default=prod"`
+
+        PriceMonitor struct {
+            UpdateInterval int `json:",default=100"`
+            DataExpire     int `json:",default=5"`
+        } `json:",optional"`
+
+        Exchanges []ExchangeConfig `json:",optional"`
+
+        Symbols []SymbolConfig `json:",optional"`
+
+        Risk struct {
+            MaxSingleAmount     float64 `json:",default=1000"`
+            MinSingleAmount     float64 `json:",default=10"`
+            MaxDailyAmount      float64 `json:",default=10000"`
+            MaxDailyCount       int     `json:",default=50"`
+            MaxExchangeRatio    float64 `json:",default=0.3"`
+            MinExchangeBalance  float64 `json:",default=100"`
+            MaxSingleLoss       float64 `json:",default=50"`
+            MaxDailyLoss        float64 `json:",default=200"`
+            MinProfitRate       float64 `json:",default=0.005"`
+            EnableCircuitBreaker bool   `json:",default=true"`
+            ConsecutiveFailures int     `json:",default=5"`
+            AutoRestartAfter    int     `json:",default=300"`
+            MaxSlippage         float64 `json:",default=0.005"`
+        } `json:",optional"`
+
+        Arbitrage struct {
+            CheckInterval    int `json:",default=50"`
+            MaxOpportunities int `json:",default=100"`
+        } `json:",optional"`
+
+        Trade struct {
+            OrderTimeout      int `json:",default=30"`
+            MaxConcurrent     int `json:",default=5"`
+            MaxRetries        int `json:",default=3"`
+            RetryInterval     int `json:",default=500"`
+        } `json:",optional"`
+    } `json:",optional"`
+}
+
+// ExchangeConfig 交易所配置
+type ExchangeConfig struct {
+    Name      string            `json:"name"`
+    Enabled   bool              `json:"enabled"`
+    Priority  int               `json:"priority"`
+    RestAPI   string            `json:"rest_api"`
+    WSAPI     string            `json:"ws_api"`
+    RateLimit map[string]int    `json:"rate_limit"`
+    APIKey    string            `json:"api_key"`      // 从环境变量或 secrets 加载
+    APISecret string            `json:"api_secret"`   // 从环境变量或 secrets 加载
+}
+
+// SymbolConfig 交易对配置
+type SymbolConfig struct {
+    Symbol          string  `json:"symbol"`
+    Enabled         bool    `json:"enabled"`
+    MinProfitRate   float64 `json:"min_profit_rate"`
+    MinAmount       float64 `json:"min_amount"`
+    MaxAmount       float64 `json:"max_amount"`
+    PricePrecision  int     `json:"price_precision"`
+    AmountPrecision int     `json:"amount_precision"`
+}
+```
+
+### 3.6 go-zero 服务上下文实现
+
+```go
+// internal/svc/servicecontext.go
+package svc
+
+import (
+    "arbitragex/internal/config"
+    "arbitragex/model"
+
+    "github.com/zeromicro/go-zero/core/stores/sqlx"
+)
+
+type ServiceContext struct {
+    Config config.Config
+
+    // 数据库连接
+    TradeExecutionsModel model.TradeExecutionsModel
+    OrdersModel          model.OrdersModel
+
+    // Redis 客户端（如果使用）
+    // RedisClient *redis.Redis
+}
+
+func NewServiceContext(c config.Config) *ServiceContext {
+    // 创建数据库连接
+    conn := sqlx.NewMysql(c.Mysql.DataSource)
+
+    return &ServiceContext{
+        Config:               c,
+        TradeExecutionsModel: model.NewTradeExecutionsModel(conn, c.Mysql.DataSource),
+        OrdersModel:          model.NewOrdersModel(conn, c.Mysql.DataSource),
+    }
+}
+```
+
 ## 4. 敏感信息配置
 
 ### 4.1 敏感信息主配置 (secrets.yaml)
@@ -481,7 +742,9 @@ exchange_api_keys:
 
 # 数据库密码
 database:
-  postgres:
+  mysql:
+    password: "ENCRYPTED_PASSWORD_HERE"
+  redis:
     password: "ENCRYPTED_PASSWORD_HERE"
 
 # 告警服务凭证
@@ -689,20 +952,34 @@ type SamplingConfig struct {
 
 // DatabaseConfig 数据库配置
 type DatabaseConfig struct {
-    Enabled bool            `yaml:"enabled"`
-    Postgres *PostgresConfig `yaml:"postgres"`
+    Enabled bool         `yaml:"enabled"`
+    MySQL   *MySQLConfig `yaml:"mysql"`
+    Redis   *RedisConfig `yaml:"redis"`
 }
 
-// PostgresConfig PostgreSQL 配置
-type PostgresConfig struct {
+// MySQLConfig MySQL 配置
+type MySQLConfig struct {
     Host            string `yaml:"host"`
     Port            int    `yaml:"port"`
     User            string `yaml:"user"`
+    Password        string `yaml:"password"` // 从 secrets 加载
     Database        string `yaml:"database"`
-    SSLMode         string `yaml:"ssl_mode"`
+    Charset         string `yaml:"charset"`
+    ParseTime       bool   `yaml:"parse_time"`
+    Loc             string `yaml:"loc"`
     MaxOpenConns    int    `yaml:"max_open_conns"`
     MaxIdleConns    int    `yaml:"max_idle_conns"`
     ConnMaxLifetime int    `yaml:"conn_max_lifetime"`
+}
+
+// RedisConfig Redis 配置
+type RedisConfig struct {
+    Host         string `yaml:"host"`
+    Port         int    `yaml:"port"`
+    Password     string `yaml:"password"` // 从 secrets 加载
+    Database     int    `yaml:"database"`
+    PoolSize     int    `yaml:"pool_size"`
+    MinIdleConns int    `yaml:"min_idle_conns"`
 }
 
 // DashboardConfig 仪表板配置
@@ -1151,7 +1428,12 @@ vim secrets.yaml
 
 ---
 
-**文档版本**: v1.0
+**文档版本**: v1.1
 **创建日期**: 2026-01-06
-**最后更新**: 2026-01-06
-**维护人**: 开发团队
+**最后更新**: 2026-01-08
+**维护人**: yangyangyang
+**更新内容**:
+- 将 PostgreSQL 配置替换为 MySQL 8.0+
+- 添加 Redis 配置支持
+- 添加 go-zero v1.9.4+ 框架配置示例和实现代码
+- 更新数据库连接字符串和配置结构

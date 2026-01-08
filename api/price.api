@@ -1,0 +1,27 @@
+syntax = "v1"
+
+info (
+	title:   "Price Monitor API"
+	desc:    "价格监控服务"
+	author:  "yangyangyang"
+	version: "v1.0"
+)
+
+type (
+	// HealthCheckResponse 健康检查响应
+	HealthCheckResponse {
+		Status  string `json:"status"`
+		Uptime  int64  `json:"uptime"`
+		Version string `json:"version"`
+	}
+)
+
+@server (
+	prefix: /api
+)
+service price-api {
+	@doc "健康检查"
+	@handler healthCheck
+	get /health (HealthCheckResponse)
+}
+

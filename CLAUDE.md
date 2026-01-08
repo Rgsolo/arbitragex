@@ -1,1511 +1,1148 @@
 # ArbitrageX 项目开发指南
 
-## 项目简介
+**版本**: v2.2.0 (精简版)
+**最后更新**: 2026-01-08
+**维护人**: yangyangyang
+
+---
+
+## ⚠️ 重要经验教训（必读）
+
+### Phase 2 问题总结（2026-01-08）
+
+#### 问题发现
+
+在 Phase 2 完成后，我们发现了两个**关键问题**：
+
+**问题 1：未遵循 go-zero 最佳实践**
+- ❌ **现象**：手动编写代码，未使用 goctl 工具生成代码结构
+- ❌ **根本原因**：没有先创建 `.api` 文件，导致缺少 `internal/handler/`、`internal/logic/` 等标准层
+- ❌ **后果**：代码不符合 go-zero 规范，无法充分利用框架生态工具
+
+**问题 2：缺少阶段验证机制**
+- ❌ **现象**：阶段完成后没有自动验证服务能否正常启动
+- ❌ **根本原因**：没有建立自动化的验证流程
+- ❌ **后果**：质量问题可能延续到后续阶段，修复成本更高
+
+#### 经验教训
+
+**1. go-zero 开发必须遵循的流程**（强制要求）
+
+```bash
+# ✅ 正确的流程（强制执行）
+1. 编写 .api 文件（API 定义）
+2. 使用 goctl 生成代码
+   goctl api go -api api/price.api -dir ./cmd/price -style go_zero
+3. 在生成的代码基础上添加业务逻辑
+4. 运行验证确保质量
+
+# ❌ 错误的流程（禁止执行）
+1. 手动编写 main.go
+2. 手动创建 internal/config、internal/svc 等
+3. 手动实现 handler 和 logic
+```
+
+**关键原则**：
+- ✅ **API 定义先行**：所有代码必须从 .api 文件开始
+- ✅ **工具生成代码**：使用 goctl 工具生成标准结构
+- ✅ **保留现有配置**：合并现有的 config、svc、types，不替换
+- ✅ **最小化 API**：Phase 2 只创建健康检查接口，业务 API 延后到 Phase 3/4
+
+**2. 每个阶段必须验证**（强制要求）
+
+```bash
+# ✅ 阶段完成后必须执行的验证
+make verify-stage    # 完整验证（9 项检查）
+make verify-quick    # 快速验证（编译+测试）
+make check-startup   # 检查服务启动
+```
+
+**验证清单**：
+- ✅ Go 版本检查（>= 1.21）
+- ✅ goctl 工具检查（>= 1.9.0）
+- ✅ 项目结构检查（必需目录存在）
+- ✅ API 文件检查（.api 文件存在且语法正确）
+- ✅ 依赖下载（go mod download）
+- ✅ 代码格式化（gofmt）
+- ✅ 编译检查（所有服务编译成功）
+- ✅ 单元测试（所有测试通过）
+- ✅ 测试覆盖率（>= 70%）
+
+**3. 并行开发后的清理工作**
+
+在生成新代码之前，必须：
+1. ✅ 删除不符合规范的代码
+2. ✅ 删除过时的文档和报告
+3. ✅ 总结经验教训并更新 CLAUDE.md
+4. ✅ 更新 .progress.json 记录问题
+
+#### 预防措施
+
+**为防止类似问题再次发生，采取以下措施**：
+
+1. **流程控制**
+   - 每个阶段开始前，先阅读 CLAUDE.md 的经验教训
+   - 使用 goctl 工具生成代码，而不是手动编写
+   - 阶段完成后立即运行验证
+
+2. **代码审查**
+   - 每个 Agent 完成任务后，检查是否符合最佳实践
+   - 生成代码前，确认 .api 文件存在且正确
+
+3. **文档更新**
+   - 发现问题后，立即更新 CLAUDE.md
+   - 定期回顾经验教训，避免重复错误
+
+#### 参考资源
+
+- [go-zero API 服务开发指南](https://go-zero.dev/docs/tutorials/cli/api)
+- [goctl RPC 工具使用](https://go-zero.dev/docs/tutorials/cli/rpc)
+- [goctl Model 工具使用](https://go-zero.dev/docs/tutorials/cli/model)
+- [go-zero 官方文档](https://go-zero.dev/en/docs/concepts/overview)
+- [go-zero GitHub 仓库](https://github.com/zeromicro/go-zero)
+
+---
+
+## 📘 go-zero 完整开发流程（基于官方文档）
+
+### 概述
+
+本章节基于 go-zero 官方文档总结了完整的开发流程，包括：
+1. **API 服务开发**（HTTP REST API）
+2. **RPC 服务开发**（gRPC 微服务）
+3. **数据库 Model 开发**（MySQL/PostgreSQL/Mongo）
+
+### 一、API 服务开发流程
+
+#### 1.1 安装 goctl 工具
+
+```bash
+# 安装最新版本的 goctl
+go install github.com/zeromicro/go-zero/tools/goctl@latest
+
+# 验证安装
+goctl --version
+# 输出示例：goctl version 1.9.2 darwin/arm64
+```
+
+**重要提示**：
+- ✅ goctl 版本应 >= 1.9.0（与 go-zero v1.9.4 配套）
+- ✅ 确保 `$GOPATH/bin` 在 PATH 中
+
+#### 1.2 创建 API 定义文件
+
+**步骤**：
+
+1. **创建 api 目录**
+   ```bash
+   mkdir -p api
+   ```
+
+2. **编写 .api 文件**
+   ```api
+   syntax = "v1"
+
+   info(
+       title: "Price Monitor API"
+       desc: "价格监控服务"
+       author: "yangyangyang"
+       version: "v1.0"
+   )
+
+   type (
+       // Request 请求结构体
+       Request {
+           Name string `json:"name"`
+       }
+
+       // Response 响应结构体
+       Response {
+           Message string `json:"message"`
+       }
+   )
+
+   @server(
+       prefix: /api
+   )
+   service price-api {
+       @doc "健康检查"
+       @handler healthCheck
+       get /health(Request) returns(Response)
+   }
+   ```
+
+**.api 文件语法说明**：
+- `syntax`: API 语法版本（固定为 "v1"）
+- `info`: 服务元信息（title、desc、author、version）
+- `type`: 定义请求和响应的结构体
+- `@server`: 服务级别配置（prefix、middleware 等）
+- `@handler`: 处理器函数名
+- `@doc`: 接口文档说明
+
+#### 1.3 使用 goctl 生成 API 服务代码
+
+```bash
+# 生成 API 服务代码
+goctl api go -api api/price.api -dir ./cmd/price -style go_zero
+
+# 参数说明：
+# -api: API 定义文件路径（必需）
+# -dir: 代码输出目录（默认当前目录）
+# -style: 文件命名风格（默认 gozero，可选 go_zero、goZero）
+```
+
+**生成的目录结构**：
+```
+cmd/price/
+├── main.go                 # 主入口文件
+├── etc/
+│   └── price.yaml         # 配置文件
+└── internal/
+    ├── config/
+    │   └── config.go      # 配置定义
+    ├── handler/
+    │   ├── routes.go      # 路由注册
+    │   └── healthcheckhandler.go  # 处理器
+    ├── logic/
+    │   └── healthchecklogic.go    # 业务逻辑
+    ├── svc/
+    │   └── servicecontext.go      # 服务上下文
+    └── types/
+        └── types.go       # 类型定义
+```
+
+**生成的关键文件说明**：
+
+1. **main.go** - 服务入口
+   ```go
+   func main() {
+       flag.Parse()
+
+       var c config.Config
+       conf.MustLoad(*configFile, &c)
+
+       ctx := svc.NewServiceContext(c)
+       server := rest.MustNewServer(c.RestConf)
+
+       // 注册路由
+       handler.RegisterHandlers(server, ctx)
+
+       server.Start()
+   }
+   ```
+
+2. **handler/routes.go** - 路由注册
+   ```go
+   func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
+       server.AddRoutes(
+           []rest.Route{
+               {
+                   Method:  http.MethodGet,
+                   Path:    "/api/health",
+                   Handler: healthCheckHandler(serverCtx),
+               },
+           },
+       )
+   }
+   ```
+
+3. **logic/xxxlogic.go** - 业务逻辑
+   ```go
+   type HealthCheckLogic struct {
+       logx.Logger
+       ctx context.Context
+       svcCtx *svc.ServiceContext
+   }
+
+   func (l *HealthCheckLogic) HealthCheck(req *types.Request) (resp *types.Response, err error) {
+       // 业务逻辑实现
+       return
+   }
+   ```
+
+#### 1.4 验证 API 文件语法
+
+```bash
+# 验证 .api 文件语法
+goctl api validate --api api/price.api
+
+# 格式化 .api 文件
+goctl api format --dir api/
+```
+
+#### 1.5 生成 Swagger 文档（可选）
+
+```bash
+# 生成 Swagger 文档
+goctl api swagger --api api/price.api --dir ./docs
+```
+
+---
+
+### 二、RPC 服务开发流程
+
+#### 2.1 创建 Proto 文件
+
+**步骤**：
+
+1. **创建 rpc 目录**
+   ```bash
+   mkdir -p rpc
+   ```
+
+2. **编写 .proto 文件**
+   ```protobuf
+   syntax = "proto3";
+
+   package greet;
+   option go_package = "./greet";
+
+   // 请求消息
+   message Request {
+       string name = 1;
+   }
+
+   // 响应消息
+   message Response {
+       string message = 2;
+   }
+
+   // Greeting 服务
+   service Greeter {
+       rpc SayHello (Request) returns (Response);
+   }
+   ```
+
+#### 2.2 使用 goctl 生成 RPC 服务代码
+
+```bash
+# 方式 1：从 proto 文件生成（推荐）
+goctl rpc protoc greet.proto --go_out=./pb --go-grpc_out=./pb --zrpc_out=. --client=true
+
+# 方式 2：快速创建 RPC 服务
+goctl rpc new greet
+
+# 参数说明：
+# --go_out: protobuf Go 代码输出目录
+# --go-grpc_out: gRPC Go 代码输出目录
+# --zrpc_out: go-zero RPC 代码输出目录
+# --client: 是否生成客户端代码（默认 true）
+```
+
+**生成的目录结构**：
+```
+.
+├── greet.proto          # proto 定义文件
+├── greet.go             # pb 代码（--go_out）
+├── greet_grpc.pb.go     # pb grpc 代码（--go-grpc_out）
+└── greet/               # RPC 服务代码（--zrpc_out）
+    ├── etc/
+    │   └── greet.yaml   # 配置文件
+    ├── greet.go        # 服务入口
+    ├── internal/
+    │   ├── config/
+    │   ├── logic/
+    │   ├── server/
+    │   └── types/
+    └── pb/              # 生成的 pb 代码
+```
+
+#### 2.3 RPC 服务配置示例
+
+**greet.yaml**：
+```yaml
+Name: greet.rpc
+ListenOn: 0.0.0.0:8080
+
+# 数据库配置
+Mysql:
+  DataSource: user:password@tcp(127.0.0.1:3306)/dbname
+
+# Redis 配置
+Redis:
+  Host: localhost:6379
+  Type: node
+  Pass: ""
+```
+
+---
+
+### 三、数据库 Model 开发流程
+
+#### 3.1 MySQL Model 生成
+
+**方式 1：从 SQL 文件生成**
+
+```bash
+# 从 SQL DDL 文件生成 Model
+goctl model mysql ddl \
+  --src=./scripts/mysql/*.sql \
+  --dir=./internal/model \
+  --cache=true \
+  --strict=false
+
+# 参数说明：
+# --src: SQL 文件路径或通配符（必需）
+# --dir: 代码输出目录（必需）
+# --cache: 是否生成带缓存的代码（默认 false）
+# --strict: 严格模式（default false）
+# --ignore-columns: 忽略的字段（create_at, update_at 等）
+# --prefix: 缓存 key 前缀（默认 "cache"）
+```
+
+**方式 2：从数据库连接生成**
+
+```bash
+# 从数据库连接生成 Model
+goctl model mysql datasource \
+  --url="user:password@tcp(127.0.0.1:3306)/database" \
+  --table="user,trade,order" \
+  --dir=./internal/model \
+  --cache=true
+
+# 参数说明：
+# --url: 数据库连接字符串（必需）
+# --table: 表名或通配符（必需）
+# --dir: 代码输出目录（默认当前目录）
+# --cache: 是否生成带缓存的代码
+```
+
+**生成的文件**（每张表）：
+
+1. **xxxmodel.go** - Model 定义（可编辑）
+   ```go
+   type (
+       UserModel interface {
+           userModel
+           // 自定义方法接口
+           FindByName(ctx context.Context, name string) (*User, error)
+       }
+
+       customUserModel struct {
+               *defaultUserModel
+       }
+   )
+
+   // NewUserModel 创建 Model
+   func NewUserModel(conn sqlx.SqlConn) UserModel {
+       return &customUserModel{
+           defaultUserModel: newUserModel(conn),
+       }
+   }
+   ```
+
+2. **xxxmodelgen.go** - Model 生成（DO NOT EDIT）
+   ```go
+   // Code generated by goctl. DO NOT EDIT.
+   type defaultUserModel struct {
+       conn sqlx.SqlConn
+       table string
+   }
+
+   func (m *defaultUserModel) Insert(ctx context.Context, data *User) error {
+       // 自动生成的插入方法
+   }
+   ```
+
+3. **types.go** - 类型定义（可编辑）
+   ```go
+   type User struct {
+       Id       int64  `json:"id"`
+       Name     string `json:"name"`
+       Age      int32  `json:"age"`
+       CreateTime time.Time `json:"createTime"`
+       UpdateTime time.Time `json:"updateTime"`
+   }
+   ```
+
+4. **error.go** - 错误定义
+
+#### 3.2 PostgreSQL Model 生成
+
+```bash
+# 从数据库连接生成
+goctl model pg datasource \
+  --url="postgres://user:password@127.0.0.1:5432/dbname?sslmode=disable" \
+  --table="user,trade" \
+  --schema="public" \
+  --dir=./internal/model \
+  --cache=true
+
+# 参数说明：
+# --schema: schema 名称（默认 "public"）
+```
+
+#### 3.3 Mongo Model 生成
+
+```bash
+# 生成 Mongo Model
+goctl model mongo \
+  --type=User,Order \
+  --dir=./internal/model \
+  --cache=false
+
+# 参数说明：
+# --type: 结构体类型名称（必需，多个用逗号分隔）
+# --easy: 是否暴露集合名称变量（default false）
+```
+
+#### 3.4 MySQL 类型映射关系
+
+**strict = true 时**：
+
+| MySQL 类型 | 是否 nullable | Golang 类型 |
+|-----------|-------------|------------|
+| tinyint | NO | uint64 |
+| tinyint | YES | sql.NullInt64 |
+| int | NO | uint64 |
+| int | YES | sql.NullInt64 |
+| bigint | NO | uint64 |
+| bigint | YES | sql.NullInt64 |
+| float | NO | float64 |
+| double | NO | float64 |
+| decimal | NO | float64 |
+| date | NO | time.Time |
+| datetime | NO | time.Time |
+| timestamp | NO | time.Time |
+| varchar | NO | string |
+| text | NO | string |
+| json | NO | string |
+| bool | NO | bool |
+
+**注意事项**：
+- `strict = true`：unsigned 字段映射到 uint64
+- `strict = false`：unsigned 字段也映射到 int64
+- 默认忽略字段：`create_at`, `created_at`, `create_time`, `update_at`, `updated_at`
+
+#### 3.5 自定义 Model 方法
+
+**场景**：需要添加自定义查询方法
+
+**步骤**：
+
+1. 编辑 `xxxmodel.go`
+2. 在接口中添加方法签名
+3. 实现 `customXxxModel` 结构体
+
+**示例**：
+```go
+type (
+    UserModel interface {
+        userModel
+        // 自定义方法
+        FindByStatus(ctx context.Context, status int) ([]*User, error)
+    }
+
+    customUserModel struct {
+        *defaultUserModel
+    }
+)
+
+func (m *customUserModel) FindByStatus(ctx context.Context, status int) ([]*User, error) {
+    var resp []*User
+    query := fmt.Sprintf("SELECT %s FROM %s WHERE status = ?", userRows, m.table)
+    err := m.conn.QueryRowsCtx(ctx, &resp, query, status)
+    return resp, err
+}
+```
+
+---
+
+### 四、完整开发流程示例
+
+#### 4.1 场景：开发一个用户管理 API 服务
+
+**步骤 1：编写 API 定义**
+
+```api
+# api/user.api
+syntax = "v1"
+
+info(
+    title: "User Management API"
+    desc: "用户管理服务"
+    author: "yangyangyang"
+    version: "v1.0"
+)
+
+type (
+    // CreateUserRequest 创建用户请求
+    CreateUserRequest {
+        Name     string `json:"name"`
+        Email    string `json:"email"`
+        Password string `json:"password"`
+    }
+
+    // CreateUserResponse 创建用户响应
+    CreateUserResponse {
+        Id   int64  `json:"id"`
+        Name string `json:"name"`
+    }
+
+    // GetUserRequest 获取用户请求
+    GetUserRequest {
+        Id int64 `path:"id"`
+    }
+
+    // GetUserResponse 获取用户响应
+    GetUserResponse {
+        Id    int64  `json:"id"`
+        Name  string `json:"name"`
+        Email string `json:"email"`
+    }
+)
+
+@server(
+    prefix: /api
+    group: user
+    middleware: Auth
+)
+service user-api {
+    @doc "创建用户"
+    @handler createUser
+    post /user(CreateUserRequest) returns(CreateUserResponse)
+
+    @doc "获取用户"
+    @handler getUser
+    get /user/:id(GetUserRequest) returns(GetUserResponse)
+}
+```
+
+**步骤 2：生成 API 服务代码**
+
+```bash
+goctl api go -api api/user.api -dir ./cmd/user -style go_zero
+```
+
+**步骤 3：初始化 goctl 配置（可选）**
+
+```bash
+# 初始化配置文件
+goctl config init
+
+# 编辑 goctl.yaml 自定义类型映射
+# model:
+#   types_map:
+#     varchar:
+#       type: string
+```
+
+**步骤 4：生成数据库 Model**
+
+```bash
+# 从 SQL 文件生成
+goctl model mysql ddl \
+  --src=./scripts/mysql/user.sql \
+  --dir=./internal/model \
+  --cache=true
+```
+
+**步骤 5：实现业务逻辑**
+
+编辑 `internal/logic/createuserlogic.go`：
+```go
+func (l *CreateUserLogic) CreateUser(req *types.CreateUserRequest) (resp *types.CreateUserResponse, err error) {
+    // 1. 参数验证
+    if req.Name == "" {
+        return nil, errors.New("name cannot be empty")
+    }
+
+    // 2. 调用 Model 层插入数据
+    userId, err := l.svcCtx.UserModel.Insert(l.ctx, &model.User{
+        Name:     req.Name,
+        Email:    req.Email,
+        Password: req.Password, // 实际应该加密
+    })
+    if err != nil {
+        return nil, err
+    }
+
+    // 3. 返回结果
+    return &types.CreateUserResponse{
+        Id:   userId,
+        Name: req.Name,
+    }, nil
+}
+```
+
+**步骤 6：运行验证**
+
+```bash
+# 编译
+make build
+
+# 运行测试
+make test
+
+# 启动服务
+./bin/user -f cmd/user/etc/user.yaml
+
+# 测试 API
+curl -X POST http://localhost:8888/api/user \
+  -H "Content-Type: application/json" \
+  -d '{"name":"test","email":"test@example.com","password":"123456"}'
+```
+
+---
+
+### 五、goctl 常用命令速查表
+
+#### 5.1 API 相关
+
+| 命令 | 说明 | 示例 |
+|------|------|------|
+| `goctl api new` | 快速创建 API 服务 | `goctl api new service-name` |
+| `goctl api go` | 生成 API 服务代码 | `goctl api go -api api/user.api -dir .` |
+| `goctl api validate` | 验证 API 文件 | `goctl api validate --api api/user.api` |
+| `goctl api format` | 格式化 API 文件 | `goctl api format --dir api/` |
+| `goctl api doc` | 生成 Markdown 文档 | `goctl api doc --dir api/ -o ./docs` |
+| `goctl api swagger` | 生成 Swagger 文档 | `goctl api swagger --api api/user.api` |
+
+#### 5.2 RPC 相关
+
+| 命令 | 说明 | 示例 |
+|------|------|------|
+| `goctl rpc new` | 快速创建 RPC 服务 | `goctl rpc new greet` |
+| `goctl rpc protoc` | 生成 RPC 服务代码 | `goctl rpc protoc greet.proto --go_out=./types --go-grpc_out=./types --zrpc_out=.` |
+| `goctl rpc template` | 生成 proto 模板 | `goctl rpc template -o greet.proto` |
+
+#### 5.3 Model 相关
+
+| 命令 | 说明 | 示例 |
+|------|------|------|
+| `goctl model mysql datasource` | 从数据库生成 MySQL Model | `goctl model mysql datasource --url="..." --table="user" --dir ./model` |
+| `goctl model mysql ddl` | 从 SQL 文件生成 MySQL Model | `goctl model mysql ddl --src=./sql/*.sql --dir ./model` |
+| `goctl model pg datasource` | 从数据库生成 PostgreSQL Model | `goctl model pg datasource --url="..." --table="user" --dir ./model` |
+| `goctl model mongo` | 生成 Mongo Model | `goctl model mongo --type=User --dir ./model` |
+
+#### 5.4 配置相关
+
+| 命令 | 说明 | 示例 |
+|------|------|------|
+| `goctl config init` | 初始化配置文件 | `goctl config init` |
+| `goctl env` | 查看 goctl 环境变量 | `goctl env` |
+| `goctl env -w` | 设置环境变量 | `goctl env -w GOCTL_EXPERIMENTAL=on` |
+
+---
+
+### 六、最佳实践总结
+
+#### 6.1 API 服务开发最佳实践
+
+✅ **DO（推荐做法）**：
+1. 先编写 .api 文件定义接口
+2. 使用 goctl 生成代码结构
+3. 在生成的 logic 层编写业务逻辑
+4. 使用 goctl api validate 验证 API 语法
+5. 定期使用 goctl api format 格式化 API 文件
+
+❌ **DON'T（避免做法）**：
+1. 手动创建 main.go 和 handler
+2. 手动定义路由
+3. 跳过 .api 文件直接编写代码
+4. 修改 goctl 生成的代码（标记为 DO NOT EDIT 的文件）
+
+#### 6.2 RPC 服务开发最佳实践
+
+✅ **DO（推荐做法）**：
+1. 使用 protobuf 定义服务接口
+2. 使用 goctl rpc protoc 生成代码
+3. 在生成的逻辑层实现业务
+4. 合理拆分 proto 文件（按业务域）
+
+❌ **DON'T（避免做法）**：
+1. 手动编写 gRPC 服务代码
+2. 在不同 proto 文件中引用 message（不支持）
+3. 忘记添加 -client 参数（如需客户端）
+
+#### 6.3 Model 开发最佳实践
+
+✅ **DO（推荐做法）**：
+1. 使用 goctl model 生成 Model 代码
+2. 在 xxxmodel.go 中添加自定义方法
+3. 不要修改 xxxmodelgen.go（DO NOT EDIT）
+4. 使用 --cache 参数生成带缓存的代码
+5. 使用 --strict 模式确保类型安全
+
+❌ **DON'T（避免做法）**：
+1. 手动编写 CRUD 操作
+2. 在 xxxmodelgen.go 中添加代码
+3. 忘记处理 nullable 类型
+4. 忽略字段命名冲突
+
+#### 6.4 项目结构最佳实践
+
+**推荐的微服务架构**：
+```
+project/
+├── api/                    # API 定义文件
+│   ├── user.api
+│   ├── order.api
+│   └── product.api
+├── cmd/                   # 服务入口
+│   ├── user/              # 用户服务（API Gateway）
+│   ├── user-rpc/          # 用户服务（RPC）
+│   ├── order/             # 订单服务
+│   └── order-rpc/         # 订单服务（RPC）
+├── internal/              # 内部实现
+│   ├── config/            # 配置
+│   ├── model/             # 数据库 Model
+│   ├── middleware/        # 中间件
+│   └── types/             # 类型定义
+├── rpc/                   # RPC 定义
+│   ├── user.proto
+│   └── order.proto
+└── scripts/               # 脚本
+    └── mysql/            # SQL 文件
+```
+
+---
+
+**文档版本**: v2.3.0
+**最后更新**: 2026-01-08
+**更新内容**: 添加完整的 go-zero 开发流程（API + RPC + Model）
+
+---
+
+## 📌 快速启动
+
+**每次启动项目时，按顺序执行**（2 分钟）：
+
+### 1. 检查项目进度 ⏱️ (30 秒)
+```bash
+# 查看项目整体进度
+cat .progress.json | jq '.current_phase, .overall_progress'
+
+# 查看并行任务状态
+cat .parallel-tasks.json | jq '.parallel_tasks[] | {task_id, name, status}'
+```
+
+### 2. 检查环境 ⏱️ (30 秒)
+```bash
+# 检查 Docker 容器
+docker-compose ps
+
+# 检查数据库连接
+docker exec -it arbitragex-mysql mysql -uarbitragex_user -pArbitrageX2025! arbitragex -e "SHOW TABLES;"
+```
+
+### 3. 恢复未完成任务 ⏱️ (根据任务数量)
+```bash
+# 如果有未完成的并行任务，告诉 Claude Code：
+# "请恢复 .parallel-tasks.json 中的未完成任务"
+```
+
+### 4. 开始工作 🚀
+```bash
+# 查看当前任务
+cat .progress.json | jq '.next_steps'
+
+# 开始开发
+# （根据 next_steps 指示进行）
+```
+
+---
+
+## 1. 项目简介
 
 **ArbitrageX** 是一个专业的加密货币跨交易所套利交易系统，支持在 CEX 和 DEX 之间进行自动化套利交易。
 
 ### 开发者信息
 - **角色**: 区块链后端开发工程师
-- **主要语言**: Go, Java, TypeScript, JavaScript
-- **偏好框架**: Go 使用 go-zero 框架
-- **交流语言**: 中文（无论用户使用何种语言提问，请用中文回答）
-- **版本管理**: Git
+- **主要语言**: Go 1.21+, Java, TypeScript
+- **框架**: Go 使用 go-zero v1.9.4+
+- **交流语言**: 中文
 - **工作目录**: `/Users/yangyangyang/code/cc/ArbitrageX`
 
-## 项目文档结构
+### 核心技术栈
+- **后端**: Go 1.21+ + go-zero v1.9.4+
+- **数据库**: MySQL 8.0+
+- **缓存**: Redis 7.0+
+- **区块链**: Ethereum, BSC
+- **CEX**: Binance, OKX, Bybit
+- **DEX**: Uniswap, SushiSwap
+- **部署**: Docker, Docker Compose, Kubernetes
 
-本项目已完成的文档位于 `docs/` 目录：
+---
+
+## 2. 项目文档结构
 
 ```
 docs/
-├── requirements/
-│   └── PRD.md                    # 产品需求文档
-├── design/
-│   ├── product_design.md         # 产品设计文档
-│   └── technical_design.md       # 技术设计文档
-├── risk/
-│   └── risk_management.md        # 风险管理文档
-├── api/
-│   └── exchange_adapter.md       # 交易所 API 适配文档
-├── monitoring/
-│   └── monitoring_alert.md       # 监控告警文档
-└── config/
-    └── config_design.md          # 配置文件设计文档
+├── requirements/           # PRD 文档（已重构）
+│   ├── PRD_Core.md
+│   ├── PRD_Technical.md
+│   └── Strategies/        # 策略文档
+├── design/                # 技术设计文档（25 个文档，已重构）
+│   ├── Architecture/      # 系统架构
+│   ├── TechStack/         # 技术栈详情
+│   ├── Modules/           # 模块设计
+│   ├── Database/          # 数据库设计
+│   ├── Deployment/        # 部署设计
+│   └── Monitoring/        # 监控设计
+├── development/           # 开发相关文档（新增）
+│   ├── PARALLEL_DEVELOPMENT.md  # 并行开发框架
+│   ├── TASK_RECOVERY.md          # 任务恢复机制
+│   └── CODING_STANDARDS.md       # 详细代码规范（待创建）
+├── risk/                  # 风险管理文档
+└── config/                # 配置文件设计（已更新 MySQL + go-zero）
 ```
 
-**重要**: 在编写代码前，请务必先阅读相关文档以理解项目需求和设计。
+**📖 文档阅读顺序**：
+1. 新手入门：`docs/design/Architecture/README.md`
+2. 技术栈：`docs/design/TechStack/README.md`
+3. 模块设计：`docs/design/Modules/README.md`
+4. 并行开发：`docs/development/PARALLEL_DEVELOPMENT.md`
 
-## 技术栈
+---
 
-### 后端开发
-- **语言**: Go 1.21+（推荐 Go 1.20+）
-- **框架**: go-zero v1.9.4（云原生微服务框架）
-- **主要库**:
-  - `github.com/zeromicro/go-zero` - go-zero 核心框架
-  - `go-resty/resty/v2` - HTTP 客户端
-  - `gorilla/websocket` - WebSocket
-  - `uber-go/zap` - 日志（go-zero 内置）
-  - `spf13/viper` - 配置管理（go-zero 内置）
-  - `ethereum/go-ethereum` - 以太坊交互（DEX）
-
-### 区块链相关
-- **CEX**: Binance, OKX, Bybit 等
-- **DEX**: Uniswap, SushiSwap, PancakeSwap
-- **链**: Ethereum, BSC
-
-### 数据库
-- **类型**: MySQL 8.0+
-- **管理方式**: Docker 容器
-- **数据库名**: `arbitragex`
-- **用户名**: `arbitragex_user`
-- **密码**: `ArbitrageX2025!`
-
-## 代码规范
+## 3. 代码规范（精简版）
 
 ### 命名规范
 
-**Go 语言**:
+**Go 语言**：
 - 包名：小写单词，不使用下划线或驼峰
   ```go
   package price  // ✓
   package priceMonitor  // ✗
   ```
-
 - 常量：驼峰命名或全大写+下划线
-  ```go
-  const MaxRetries = 3  // ✓
-  const MAX_RETRIES = 3  // ✓
-  ```
-
 - 变量/函数：驼峰命名
-  ```go
-  func getTicker() {}  // ✓
-  func GetTicker() {}  // ✓ (公开函数)
-  var priceCache  // ✓
-  ```
-
-- 接口：通常以 -er 结尾
-  ```go
-  type PriceMonitorer interface {}  // ✓
-  type ExchangeAdapter interface {}  // ✓
-  ```
+- 接口：通常以 -er 结尾（如 `PriceMonitorer`）
 
 ### 格式规范
-
-- **Go**: 使用 `gofmt` 或 `goimports` 格式化
-  ```bash
-  gofmt -w .
-  goimports -w .
-  ```
-
-- 缩进：Go 使用 tab，其他语言使用 2 或 4 空格
+- **Go**: 使用 `gofmt` 或 `goimports`
+- 缩进：Go 使用 tab，其他语言 2-4 空格
 - 每行最大长度：120 字符
 
 ### 注释规范
-
-**必须添加注释的场景**:
-
-1. **所有公开的 API**（包级函数、公开方法、结构体）
-   ```go
-   // PriceMonitor 价格监控器，负责从各交易所获取实时价格数据
-   type PriceMonitor struct {
-       exchanges map[string]ExchangeAdapter
-       priceChan chan *PriceTick
-       logger    log.Logger
-   }
-
-   // Start 启动价格监控，开始从各交易所获取价格数据
-   // 参数:
-   //   - ctx: 上下文对象，用于控制监控生命周期
-   // 返回:
-   //   - error: 启动失败时返回错误
-   func (pm *PriceMonitor) Start(ctx context.Context) error {
-       // 实现逻辑
-   }
-   ```
-
-2. **复杂的业务逻辑**
-   ```go
-   // 使用指数退避算法进行重试，避免短时间内频繁重试
-   // 退避时间：1s, 2s, 4s, 8s...
-   for i := 0; i < maxRetries; i++ {
-       if err := try(); err == nil {
-           return nil
-       }
-       time.Sleep(time.Duration(1<<uint(i)) * time.Second)
-   }
-   ```
-
-3. **关键算法和数据处理**
-   ```go
-   // 使用恒定乘积公式计算 DEX 输出金额
-   // 公式: amountOut = (amountIn * 997 * reserveOut) / (reserveIn * 1000 + amountIn * 997)
-   // 其中 0.3% 为手续费
-   ```
-
-4. **TODO 和 FIXME**
-   ```go
-   // TODO: 添加更多交易所支持
-   // FIXME: 处理并发竞态条件
-   ```
-
-5. **文件级别注释**
-   ```go
-   // Package price 提供价格监控相关功能
-   // 支持从多个 CEX 和 DEX 获取实时价格数据
-   package price
-   ```
-
-### 注释语言
-- 所有注释使用**中文**编写
-- 专业术语保留英文（如 API、WebSocket、Goroutine）
-
-## 单元测试规范
+- **必须添加注释的场景**：
+  1. 所有公开的 API（函数、方法、结构体）
+  2. 复杂的业务逻辑
+  3. 关键算法和数据处理
+  4. TODO 和 FIXME
+  5. 文件级别注释
+- **注释语言**：中文（专业术语保留英文）
 
 ### 测试要求
-- **所有代码在输出时必须设计相应的单元测试用例**
+- **所有代码必须编写单元测试**
 - 核心业务逻辑测试覆盖率 ≥ 80%
-- 测试文件命名：`xxx_test.go`
-
-### 测试风格
-
-**使用表驱动测试**:
-```go
-func TestCalculateProfit(t *testing.T) {
-    tests := []struct {
-        name          string
-        buyPrice      float64
-        sellPrice     float64
-        amount        float64
-        wantProfit    float64
-        wantProfitRate float64
-        wantErr       bool
-        errMsg        string
-    }{
-        {
-            name:       "正常计算收益",
-            buyPrice:   43000,
-            sellPrice:  43250,
-            amount:     0.1,
-            wantProfit: 25,
-            wantProfitRate: 0.0058,  // 0.58%
-            wantErr:    false,
-        },
-        {
-            name:       "价格为负数",
-            buyPrice:   -100,
-            sellPrice:  43250,
-            amount:     0.1,
-            wantErr:    true,
-            errMsg:     "price cannot be negative",
-        },
-        {
-            name:       "收益率为负",
-            buyPrice:   43250,
-            sellPrice:  43000,
-            amount:     0.1,
-            wantProfit: -25,
-            wantProfitRate: -0.0058,
-            wantErr:    false,
-        },
-    }
-
-    for _, tt := range tests {
-        t.Run(tt.name, func(t *testing.T) {
-            profit, profitRate, err := CalculateProfit(tt.buyPrice, tt.sellPrice, tt.amount)
-
-            if (err != nil) != tt.wantErr {
-                t.Errorf("CalculateProfit() error = %v, wantErr %v", err, tt.wantErr)
-                return
-            }
-
-            if tt.wantErr && err.Error() != tt.errMsg {
-                t.Errorf("CalculateProfit() error message = %v, want %v", err.Error(), tt.errMsg)
-            }
-
-            if !tt.wantErr {
-                if math.Abs(profit-tt.wantProfit) > 0.01 {
-                    t.Errorf("CalculateProfit() profit = %v, want %v", profit, tt.wantProfit)
-                }
-                if math.Abs(profitRate-tt.wantProfitRate) > 0.0001 {
-                    t.Errorf("CalculateProfit() profitRate = %v, want %v", profitRate, tt.wantProfitRate)
-                }
-            }
-        })
-    }
-}
-```
-
-### 测试原则
-1. **单一职责**: 每个测试用例只测试一个功能点
-2. **独立性**: 测试用例之间相互独立
-3. **可重复性**: 测试结果稳定可重复
-4. **清晰性**: 测试用例命名清晰描述测试场景
-5. **边界测试**: 包含正常、边界、异常场景
-
-### Mock 使用
-对于外部依赖（如交易所 API），使用 mock 进行测试：
-
-```go
-//go:generate mockgen -source=exchange.go -destination=mock_exchange.go
-
-func TestPriceMonitor_Start(t *testing.T) {
-    mockExchange := &MockExchangeAdapter{
-        // 设置 mock 行为
-    }
-
-    monitor := NewPriceMonitor(mockExchange)
-    err := monitor.Start(context.Background())
-
-    assert.NoError(t, err)
-}
-```
-
-## go-zero 最佳实践
-
-### 框架概述
-- **当前版本**: go-zero v1.9.4（2025年12月）
-- **官方文档**: https://go-zero.dev/
-- **GitHub**: https://github.com/zeromicro/go-zero
-- **设计理念**: 云原生、高并发、微服务框架
-
-### 项目结构规范
-
-#### 推荐的微服务架构
-```
-ArbitrageX/
-├── cmd/                          # 应用入口
-│   ├── price/                    # 价格监控服务
-│   │   └── main.go
-│   ├── engine/                   # 套利引擎服务
-│   │   └── main.go
-│   └── trade/                    # 交易执行服务
-│       └── main.go
-├── internal/                     # 内部实现
-│   ├── config/                   # 配置管理
-│   │   └── config.go
-│   ├── handler/                  # HTTP handler 层
-│   │   └── routes.go
-│   ├── logic/                    # 业务逻辑层
-│   │   └── ...
-│   ├── svc/                      # 服务上下文
-│   │   └── servicecontext.go
-│   └── types/                    # 类型定义
-│       └── types.go
-├── api/                          # API 定义（如需要 HTTP 接口）
-│   └── arbitragex.api
-├── rpc/                          # RPC 定义（如需要 gRPC 服务）
-│   └── arbitragex.proto
-├── pkg/                          # 公共库
-│   └── ...
-└── common/                       # 公共代码
-    ├── middleware/               # 中间件
-    ├── model/                    # 数据模型
-    └── utils/                    # 工具函数
-```
-
-#### 服务拆分原则
-根据 [go-zero-looklook](https://github.com/Mikaelemmmm/go-zero-looklook) 最佳实践：
-
-1. **API 网关层**（HTTP 服务）
-   - 对外提供 REST API
-   - 处理认证、授权、限流
-   - 数据聚合和简单业务逻辑
-
-2. **RPC 服务层**（gRPC 服务）
-   - 复杂业务逻辑
-   - 服务间通信
-   - 高性能内部调用
-
-3. **数据访问层**
-   - 数据库操作
-   - 缓存管理
-   - 外部 API 调用
-
-### 配置管理最佳实践
-
-#### 使用 go-zero 内置配置
-```go
-// internal/config/config.go
-package config
-
-import "github.com/zeromicro/go-zero/zrpc"
-
-type Config struct {
-    rest.RestConf
-    // 数据库配置
-    Mysql struct {
-        DataSource string
-    }
-    // Redis 配置
-    Redis struct {
-        Host string
-        Type int
-    }
-    // 交易所配置
-    Exchanges []ExchangeConfig
-}
-```
-
-#### 服务上下文
-```go
-// internal/svc/servicecontext.go
-package svc
-
-import (
-    "arbitragex/internal/config"
-    "arbitragex/internal/dao"
-)
-
-type ServiceContext struct {
-    Config config.Config
-    // 依赖项
-    ExchangeDao dao.ExchangeDao
-}
-
-func NewServiceContext(c config.Config) *ServiceContext {
-    return &ServiceContext{
-        Config:       c,
-        ExchangeDao: dao.NewExchangeDao(c),
-    }
-}
-```
-
-### 中间件使用
-
-#### 1. 日志中间件
-```go
-// common/middleware/loggingmiddleware.go
-package middleware
-
-import (
-    "net/http"
-    "time"
-
-    "github.com/zeromicro/go-zero/core/logx"
-)
-
-type LoggingMiddleware struct {
-    logx.Logger
-}
-
-func NewLoggingMiddleware(log logx.Logger) *LoggingMiddleware {
-    return &LoggingMiddleware{Logger: log}
-}
-
-func (m *LoggingMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        start := time.Now()
-        // 记录请求
-        m.Infof("请求: %s %s", r.Method, r.URL.Path)
-        next(w, r)
-        // 记录响应时间
-        m.Infof("完成: %s, 耗时: %v", r.URL.Path, time.Since(start))
-    }
-}
-```
-
-#### 2. 认证中间件
-```go
-// common/middleware/authmiddleware.go
-package middleware
-
-import (
-    "net/http"
-)
-
-type AuthMiddleware struct {
-    secret string
-}
-
-func NewAuthMiddleware(secret string) *AuthMiddleware {
-    return &AuthMiddleware{secret: secret}
-}
-
-func (m *AuthMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        token := r.Header.Get("Authorization")
-        if !m.validateToken(token) {
-            http.Error(w, "Unauthorized", http.StatusUnauthorized)
-            return
-        }
-        next(w, r)
-    }
-}
-```
-
-#### 在 API 中使用中间件
-```api
-// API 定义
-syntax = "v1"
-
-info(
-    title: "ArbitrageX"
-    desc: "套利交易系统"
-    author: "yangyangyang"
-    version: "v1.0"
-)
-
-import "middleware/middleware.api"
-
-// 声明中间件
-@server(
-    middleware: Auth, Logging
-)
-service ArbitrageX {
-    @doc "获取系统状态"
-    @handler getStatus
-    get /status returns(StatusResp)
-}
-```
-
-### 错误处理最佳实践
-
-#### 1. 定义错误码
-```go
-// common/errors/code.go
-package errors
-
-const (
-    // 成功
-    OK              = 0
-
-    // 价格监控错误 (1000-1999)
-    PriceFetchError   = 1001
-    PriceParseError   = 1002
-
-    // 交易执行错误 (2000-2999)
-    TradeExecuteError = 2001
-    OrderFailedError  = 2002
-    InsufficientBalance = 2003
-
-    // 风险控制错误 (3000-3999)
-    RiskCheckFailed   = 3001
-    CircuitBreakerOpen = 3002
-)
-
-// 错误信息映射
-var CodeMsg = map[int]string{
-    OK:               "成功",
-    PriceFetchError:  "获取价格失败",
-    PriceParseError:  "解析价格数据失败",
-    TradeExecuteError: "交易执行失败",
-    OrderFailedError:  "下单失败",
-    InsufficientBalance: "余额不足",
-    RiskCheckFailed:  "风险检查失败",
-    CircuitBreakerOpen: "熔断器已触发",
-}
-```
-
-#### 2. 自定义错误处理
-```go
-// common/errors/errorhandler.go
-package errors
-
-import (
-    "net/http"
-
-    "github.com/zeromicro/go-zero/rest/httpx"
-)
-
-// ErrorHandler 统一错误处理
-func ErrorHandler(err error) (int, interface{}) {
-    // 获取错误码
-    code, ok := GetErrorCode(err)
-    if !ok {
-        // 默认错误
-        return http.StatusInternalServerError, map[string]interface{}{
-            "code":    500,
-            "message": "内部服务错误",
-        }
-    }
-
-    return http.StatusOK, map[string]interface{}{
-        "code":    code,
-        "message": CodeMsg[code],
-    }
-}
-
-// HTTP 错误响应
-func HTTPError(w http.ResponseWriter, r *http.Request, err error) {
-    code, msg := ErrorHandler(err)
-    httpx.OkJson(w, msg)
-}
-```
-
-#### 3. 业务错误使用
-```go
-// internal/logic/pricemonitorlogic.go
-package logic
-
-import (
-    "arbitragex/common/errors"
-
-    "github.com/zeromicro/go-zero/core/logx"
-)
-
-func (l *PriceMonitorLogic) FetchPrice() error {
-    ticker, err := l.exchange.GetTicker("BTC/USDT")
-    if err != nil {
-        logx.Errorf("获取价格失败: %v", err)
-        return errors.NewCodeError(errors.PriceFetchError, err.Error())
-    }
-
-    // 处理数据
-    return nil
-}
-```
-
-### 日志使用最佳实践
-
-#### 结构化日志
-```go
-import "github.com/zeromicro/go-zero/core/logx"
-
-// 记录普通日志
-logx.Info("开始处理套利机会")
-logx.Errorf("处理失败: %v", err)
-
-// 记录结构化日志
-logx.WithContext(ctx).Infow("交易执行",
-    logx.Field("order_id", orderID),
-    logx.Field("symbol", "BTC/USDT"),
-    logx.Field("amount", 0.1),
+- 使用表驱动测试（Table-Driven Tests）
+
+**📖 详细规范**：参考 `docs/development/CODING_STANDARDS.md`（待创建）
+
+---
+
+## 4. 并行开发工作模式
+
+### 概述
+
+**ArbitrageX 使用多 Agent 并行协作开发模式**，模拟真实团队协作，提高开发效率。
+
+**核心理念**：
+- ✅ 多个 Agent 同时工作，互不干扰
+- ✅ 接口先行，确保模块独立
+- ✅ 频繁集成，快速迭代
+- ✅ 任务持久化，支持中断恢复
+
+### 快速检查清单
+
+**启动并行任务前**：
+1. ✅ 读取 `.parallel-tasks.json` 检查未完成任务
+2. ✅ 读取 `.progress.json` 检查项目阶段
+3. ✅ 定义清晰的接口（如果并行开发不同模块）
+4. ✅ 启动并行任务（建议 3-5 个同时并行）
+5. ✅ 每启动/完成一个任务就保存进度
+
+**恢复中断的任务**：
+1. ✅ 读取 `.parallel-tasks.json`
+2. ✅ 检查任务状态
+3. ✅ 重新启动 `pending` 和 `in_progress` 的任务
+4. ✅ 验证 `completed` 任务的结果
+
+### Agent 使用
+
+**可用 Agent**：
+- `general-purpose` ⭐ **最常用**：通过 prompt 指定角色
+- `go-developer`：Go 代码实现
+- `test-engineer`：测试用例编写
+- `code-reviewer`：代码审查
+- `blockchain-expert`：区块链相关
+- `devops-engineer`：Docker、数据库、部署（使用 general-purpose 模拟）
+
+**使用示例**：
+```python
+# 启动并行任务
+Task(
+    subagent_type="general-purpose",
+    prompt="你是 DevOps 工程师，配置 Docker 环境...",
+    run_in_background=True
 )
 ```
 
-#### 日志配置
-```yaml
-# go-zero 内置日志配置
-Log:
-  ServiceName: arbitragex
-  Mode: console
-  Level: info
-  Encoding: json
-  Path: logs
-  KeepDays: 7
-  Compress: true
-```
+**📖 详细文档**：
+- `docs/development/PARALLEL_DEVELOPMENT.md` - 并行开发框架
+- `docs/development/TASK_RECOVERY.md` - 任务恢复机制
+- `CLAUDE.md` 第 1724-2338 行 - 完整的并行开发指南
 
-### RPC 服务最佳实践
+---
 
-#### Proto 定义
-```protobuf
-// rpc/trade.proto
-syntax = "proto3";
+## 5. 开发流程
 
-package trade;
-option go_package = "./trade";
+### 新功能开发
+1. 阅读相关文档（需求、设计）
+2. 创建功能分支
+   ```bash
+   git checkout -b feature/price-monitor
+   ```
+3. 编写代码和测试
+4. 运行测试确保通过
+5. 提交代码
+   ```bash
+   git add .
+   git commit -m "feat(price): 实现价格监控功能"
+   ```
+6. 推送到远程
+   ```bash
+   git push origin feature/price-monitor
+   ```
 
-message TradeRequest {
-    string symbol = 1;
-    double amount = 2;
-    double buy_price = 3;
-    double sell_price = 4;
-}
+### Bug 修复
+1. 定位问题
+2. 编写复现用例
+3. 修复 Bug
+4. 添加测试防止回归
+5. 提交修复
 
-message TradeResponse {
-    int32 code = 1;
-    string message = 2;
-    string trade_id = 3;
-}
+### 代码审查清单
 
-service Trade {
-    rpc Execute(TradeRequest) returns(TradeResponse);
-}
-```
+提交代码前检查：
+- [ ] 代码已通过 `gofmt` 格式化
+- [ ] 所有公开 API 有清晰的中文注释
+- [ ] 核心逻辑有对应的单元测试
+- [ ] 测试覆盖率符合要求
+- [ ] 没有硬编码的配置值
+- [ ] 错误处理完善，不忽略错误
+- [ ] 日志记录合理，使用结构化日志
+- [ ] 没有明显的性能问题
+- [ ] 敏感信息不暴露
+- [ ] Git 提交信息符合规范
 
-#### RPC 代码生成
+---
+
+## 6. 常用命令
+
+### 开发命令
 ```bash
-# 生成 RPC 代码
-goctl rpc protoc rpc/trade.proto --go_out=./types --go-grpc_out=./types --zrpc_out=.
+# 格式化代码
+go fmt ./...
+goimports -w .
+
+# 运行测试
+go test -v ./...
+go test -cover ./...
+
+# 生成依赖
+go mod tidy
+go mod vendor
 ```
 
-### 性能优化最佳实践
-
-#### 1. 使用 go-zero 内置缓存
-```go
-import "github.com/zeromicro/go-zero/core/collection"
-
-// 创建缓存
-cache := collection.NewCache(5*time.Minute, 10*time.Minute)
-
-// 设置缓存
-cache.Set("BTC_USDT", ticker, 5*time.Minute)
-
-// 获取缓存
-if val, ok := cache.Get("BTC_USDT"); ok {
-    return val.(*Ticker)
-}
-```
-
-#### 2. 使用限流器
-```go
-import "github.com/zeromicro/go-zero/core/limit"
-
-// 创建限流器（100请求/秒）
-limiter := limit.NewTokenLimiter(100, 1000)
-
-// 使用限流
-if limiter.Allow() {
-    // 处理请求
-}
-```
-
-#### 3. 使用熔断器
-```go
-import "github.com/zeromicro/go-zero/core/c breaker"
-
-// 创建熔断器
-cb := breaker.NewBreaker(breaker.WithWindow(time.Second*10))
-
-// 使用熔断器
-err := cb.DoWithFallback(func() error {
-    // 正常逻辑
-    return callExchangeAPI()
-}, func(err error) error {
-    // 降级逻辑
-    return getFallbackData()
-})
-```
-
-### goctl CLI 工具使用
-
-#### 安装
+### 构建和运行
 ```bash
-go install github.com/zeromicro/go-zero/tools/goctl@latest
+# 构建
+go build -o bin/arbitragex cmd/arbitragex/main.go
+
+# 运行
+./bin/arbitragex -config config/config.yaml
+
+# 使用 make
+make build
+make run
+make test
 ```
 
-#### 常用命令
-```bash
-# API 服务初始化
-goctl api init -o api/arbitragex.api
-
-# 生成 API 服务代码
-goctl api go -api api/arbitragex.api -dir .
-
-# RPC 服务初始化
-goctl rpc template -o rpc/arbitragex.proto
-
-# 生成 RPC 服务代码
-goctl rpc protoc rpc/arbitragex.proto --go_out=./types --go-grpc_out=./types --zrpc_out=.
-
-# 生成 Model 代码
-goctl model mysql datasource -url="user:password@tcp(127.0.0.1:3306)/database" -table="*" -dir="./model"
-
-# 生成 Docker 文件
-goctl docker -go arbitragex.api
-
-# 生成 K8s 部署文件
-goctl kube deploy -name arbitragex -namespace default -image arbitragex:latest -o arbitragex.yaml -port 8888
-```
-
-### 关键原则总结
-
-根据 go-zero 官方文档和社区最佳实践：
-
-1. **服务拆分**
-   - ✅ API 网关负责简单业务和数据聚合
-   - ✅ RPC 服务处理复杂业务逻辑
-   - ✅ 保持服务"小而有意义"，避免过度拆分
-
-2. **错误处理**
-   - ✅ 使用统一的错误码和错误处理
-   - ✅ 记录详细的错误日志
-   - ✅ 避免在响应中暴露敏感信息
-
-3. **日志管理**
-   - ✅ 使用结构化日志
-   - ✅ 日志级别合理配置
-   - ✅ 日志包含必要的上下文信息
-
-4. **性能优化**
-   - ✅ 合理使用缓存
-   - ✅ 实施限流和熔断
-   - ✅ 监控关键性能指标
-
-5. **安全实践**
-   - ✅ 使用中间件进行认证授权
-   - ✅ API 限流防止滥用
-   - ✅ 敏感信息加密存储
-
-### 参考资源
-
-- [go-zero 官方文档](https://go-zero.dev/en/docs/concepts/overview)
-- [go-zero GitHub 仓库](https://github.com/zeromicro/go-zero)
-- [go-zero 架构演进](https://go-zero.dev/en/docs/concepts/architecture-evolution)
-- [go-zero-looklook 最佳实践项目](https://github.com/Mikaelemmmm/go-zero-looklook)
-- [go-zero 官方示例](https://github.com/zeromicro/zero-examples)
-
-## Docker 部署最佳实践
-
-### MySQL 数据库配置
-
-#### 数据库连接信息
-```
-数据库类型: MySQL 8.0+
-数据库名称: arbitragex
-用户名: arbitragex_user
-密码: ArbitrageX2025!
-主机: localhost (Docker 容器)
-端口: 3306
-字符集: utf8mb4
-排序规则: utf8mb4_unicode_ci
-```
-
-#### Docker 启动 MySQL
-```bash
-# 使用 Docker 单独启动 MySQL
-docker run --name arbitragex-mysql \
-  -e MYSQL_ROOT_PASSWORD=root_password \
-  -e MYSQL_DATABASE=arbitragex \
-  -e MYSQL_USER=arbitragex_user \
-  -e MYSQL_PASSWORD=ArbitrageX2025! \
-  -p 3306:3306 \
-  -v /path/to/mysql-data:/var/lib/mysql \
-  -d mysql:8.0 \
-  --character-set-server=utf8mb4 \
-  --collation-server=utf8mb4_unicode_ci
-```
-
-### Docker Compose 完整配置
-
-#### docker-compose.yml
-```yaml
-version: '3.8'
-
-services:
-  # MySQL 数据库
-  mysql:
-    image: mysql:8.0
-    container_name: arbitragex-mysql
-    restart: always
-    ports:
-      - "3306:3306"
-    environment:
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_DATABASE: arbitragex
-      MYSQL_USER: arbitragex_user
-      MYSQL_PASSWORD: ArbitrageX2025!
-      TZ: Asia/Shanghai
-    volumes:
-      # 数据持久化
-      - ./data/mysql:/var/lib/mysql
-      # 初始化脚本
-      - ./scripts/mysql:/docker-entrypoint-initdb.d
-      # 配置文件
-      - ./config/mysql.cnf:/etc/mysql/conf.d/custom.cnf
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
-      - --default-authentication-plugin=mysql_native_password
-    networks:
-      - arbitragex-network
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-  # Redis 缓存（可选）
-  redis:
-    image: redis:7-alpine
-    container_name: arbitragex-redis
-    restart: always
-    ports:
-      - "6379:6379"
-    command: redis-server --appendonly yes
-    volumes:
-      - ./data/redis:/data
-    networks:
-      - arbitragex-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-
-  # ArbitrageX 应用（价格监控服务）
-  price-monitor:
-    build:
-      context: .
-      dockerfile: Dockerfile.price
-    container_name: arbitragex-price-monitor
-    restart: always
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      # 环境变量
-      - ENV=production
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
-      - MYSQL_DATABASE=arbitragex
-      - MYSQL_USER=arbitragex_user
-      - MYSQL_PASSWORD=ArbitrageX2025!
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    volumes:
-      # 配置文件
-      - ./config:/app/config
-      # 日志文件
-      - ./logs:/app/logs
-      # 敏感信息
-      - ./secrets:/app/secrets
-    networks:
-      - arbitragex-network
-
-  # ArbitrageX 应用（套利引擎服务）
-  arbitrage-engine:
-    build:
-      context: .
-      dockerfile: Dockerfile.engine
-    container_name: arbitragex-engine
-    restart: always
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      price-monitor:
-        condition: service_started
-    environment:
-      - ENV=production
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
-      - MYSQL_DATABASE=arbitragex
-      - MYSQL_USER=arbitragex_user
-      - MYSQL_PASSWORD=ArbitrageX2025!
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    volumes:
-      - ./config:/app/config
-      - ./logs:/app/logs
-      - ./secrets:/app/secrets
-    networks:
-      - arbitragex-network
-
-  # ArbitrageX 应用（交易执行服务）
-  trade-executor:
-    build:
-      context: .
-      dockerfile: Dockerfile.trade
-    container_name: arbitragex-trade-executor
-    restart: always
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      arbitrage-engine:
-        condition: service_started
-    environment:
-      - ENV=production
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
-      - MYSQL_DATABASE=arbitragex
-      - MYSQL_USER=arbitragex_user
-      - MYSQL_PASSWORD=ArbitrageX2025!
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    volumes:
-      - ./config:/app/config
-      - ./logs:/app/logs
-      - ./secrets:/app/secrets
-    networks:
-      - arbitragex-network
-
-networks:
-  arbitragex-network:
-    driver: bridge
-
-volumes:
-  mysql-data:
-  redis-data:
-```
-
-### Dockerfile 配置
-
-#### Dockerfile.price（价格监控服务）
-```dockerfile
-FROM golang:1.21-alpine AS builder
-
-# 安装必要工具
-RUN apk add --no-cache git make
-
-# 设置工作目录
-WORKDIR /build
-
-# 复制 go mod 文件
-COPY go.mod go.sum ./
-RUN go mod download
-
-# 复制源代码
-COPY . .
-
-# 编译价格监控服务
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o price-monitor ./cmd/price
-
-# 运行阶段
-FROM alpine:latest
-
-# 安装 ca 证书
-RUN apk --no-cache add ca-certificates tzdata
-
-# 设置时区
-ENV TZ=Asia/Shanghai
-
-WORKDIR /app
-
-# 从构建阶段复制二进制文件
-COPY --from=builder /build/price-monitor .
-
-# 创建日志目录
-RUN mkdir -p /app/logs
-
-# 暴露端口（如果需要 HTTP 接口）
-EXPOSE 8888
-
-# 运行服务
-CMD ["./price-monitor", "-f", "config/config.yaml"]
-```
-
-#### Dockerfile.engine（套利引擎服务）
-```dockerfile
-FROM golang:1.21-alpine AS builder
-
-RUN apk add --no-cache git make
-
-WORKDIR /build
-
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY . .
-
-# 编译套利引擎服务
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o arbitrage-engine ./cmd/engine
-
-FROM alpine:latest
-
-RUN apk --no-cache add ca-certificates tzdata
-ENV TZ=Asia/Shanghai
-
-WORKDIR /app
-
-COPY --from=builder /build/arbitrage-engine .
-RUN mkdir -p /app/logs
-
-CMD ["./arbitrage-engine", "-f", "config/config.yaml"]
-```
-
-#### Dockerfile.trade（交易执行服务）
-```dockerfile
-FROM golang:1.21-alpine AS builder
-
-RUN apk add --no-cache git make
-
-WORKDIR /build
-
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY . .
-
-# 编译交易执行服务
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o trade-executor ./cmd/trade
-
-FROM alpine:latest
-
-RUN apk --no-cache add ca-certificates tzdata
-ENV TZ=Asia/Shanghai
-
-WORKDIR /app
-
-COPY --from=builder /build/trade-executor .
-RUN mkdir -p /app/logs
-
-CMD ["./trade-executor", "-f", "config/config.yaml"]
-```
-
-### MySQL 初始化脚本
-
-#### scripts/mysql/01-init-database.sql
-```sql
--- ArbitrageX 数据库初始化脚本
-
--- 创建数据库（如果不存在）
-CREATE DATABASE IF NOT EXISTS `arbitragex`
-DEFAULT CHARACTER SET utf8mb4
-DEFAULT COLLATE utf8mb4_unicode_ci;
-
-USE `arbitragex`;
-
--- 创建交易执行记录表
-CREATE TABLE IF NOT EXISTS `trade_executions` (
-    `id` VARCHAR(64) PRIMARY KEY COMMENT '执行ID',
-    `opportunity_id` VARCHAR(64) NOT NULL COMMENT '套利机会ID',
-    `symbol` VARCHAR(20) NOT NULL COMMENT '交易对',
-    `buy_exchange` VARCHAR(20) NOT NULL COMMENT '买入交易所',
-    `sell_exchange` VARCHAR(20) NOT NULL COMMENT '卖出交易所',
-    `buy_price` DECIMAL(20, 8) NOT NULL COMMENT '买入价格',
-    `sell_price` DECIMAL(20, 8) NOT NULL COMMENT '卖出价格',
-    `amount` DECIMAL(20, 8) NOT NULL COMMENT '交易金额',
-    `est_profit` DECIMAL(20, 8) NOT NULL COMMENT '预期收益',
-    `actual_profit` DECIMAL(20, 8) COMMENT '实际收益',
-    `status` VARCHAR(20) NOT NULL COMMENT '执行状态',
-    `started_at` TIMESTAMP NOT NULL COMMENT '开始时间',
-    `completed_at` TIMESTAMP NULL COMMENT '完成时间',
-    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-    INDEX `idx_symbol` (`symbol`),
-    INDEX `idx_status` (`status`),
-    INDEX `idx_started_at` (`started_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='交易执行记录表';
-
--- 创建订单记录表
-CREATE TABLE IF NOT EXISTS `orders` (
-    `id` VARCHAR(64) PRIMARY KEY COMMENT '订单ID',
-    `execution_id` VARCHAR(64) NOT NULL COMMENT '执行ID',
-    `exchange` VARCHAR(20) NOT NULL COMMENT '交易所',
-    `symbol` VARCHAR(20) NOT NULL COMMENT '交易对',
-    `side` VARCHAR(10) NOT NULL COMMENT '买卖方向',
-    `type` VARCHAR(10) NOT NULL COMMENT '订单类型',
-    `price` DECIMAL(20, 8) NOT NULL COMMENT '价格',
-    `amount` DECIMAL(20, 8) NOT NULL COMMENT '数量',
-    `filled_amount` DECIMAL(20, 8) NOT NULL DEFAULT 0 COMMENT '已成交数量',
-    `fee` DECIMAL(20, 8) NOT NULL DEFAULT 0 COMMENT '手续费',
-    `status` VARCHAR(20) NOT NULL COMMENT '订单状态',
-    `exchange_order_id` VARCHAR(100) COMMENT '交易所订单ID',
-    `created_at` TIMESTAMP NOT NULL COMMENT '创建时间',
-    `updated_at` TIMESTAMP NOT NULL COMMENT '更新时间',
-    FOREIGN KEY (`execution_id`) REFERENCES `trade_executions`(`id`) ON DELETE CASCADE,
-    INDEX `idx_execution_id` (`execution_id`),
-    INDEX `idx_exchange_symbol` (`exchange`, `symbol`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='订单记录表';
-
--- 创建套利机会记录表
-CREATE TABLE IF NOT EXISTS `arbitrage_opportunities` (
-    `id` VARCHAR(64) PRIMARY KEY COMMENT '机会ID',
-    `symbol` VARCHAR(20) NOT NULL COMMENT '交易对',
-    `buy_exchange` VARCHAR(20) NOT NULL COMMENT '买入交易所',
-    `sell_exchange` VARCHAR(20) NOT NULL COMMENT '卖出交易所',
-    `buy_price` DECIMAL(20, 8) NOT NULL COMMENT '买入价格',
-    `sell_price` DECIMAL(20, 8) NOT NULL COMMENT '卖出价格',
-    `price_diff` DECIMAL(20, 8) NOT NULL COMMENT '价格差',
-    `price_diff_rate` DECIMAL(10, 6) NOT NULL COMMENT '价差百分比',
-    `revenue_rate` DECIMAL(10, 6) NOT NULL COMMENT '收益率',
-    `est_revenue` DECIMAL(20, 8) NOT NULL COMMENT '预期收益',
-    `discovered_at` TIMESTAMP NOT NULL COMMENT '发现时间',
-    `executed` BOOLEAN DEFAULT FALSE COMMENT '是否已执行',
-    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    INDEX `idx_symbol_discovered` (`symbol`, `discovered_at`),
-    INDEX `idx_executed` (`executed`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='套利机会记录表';
-
--- 创建系统日志表（可选）
-CREATE TABLE IF NOT EXISTS `system_logs` (
-    `id` BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '日志ID',
-    `level` VARCHAR(10) NOT NULL COMMENT '日志级别',
-    `module` VARCHAR(50) NOT NULL COMMENT '模块名称',
-    `message` TEXT NOT NULL COMMENT '日志消息',
-    `fields` JSON COMMENT '附加字段',
-    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    INDEX `idx_level` (`level`),
-    INDEX `idx_module` (`module`),
-    INDEX `idx_created_at` (`created_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='系统日志表';
-
--- 插入初始数据（如果需要）
--- INSERT INTO `config` (`key`, `value`) VALUES ('version', '1.0.0');
-
--- 显示初始化完成信息
-SELECT 'MySQL Database Initialized Successfully!' AS Message;
-```
-
-#### config/mysql.cnf（MySQL 配置文件）
-```ini
-[mysqld]
-# 字符集设置
-character-set-server=utf8mb4
-collation-server=utf8mb4_unicode_ci
-
-# 连接设置
-max_connections=200
-max_connect_errors=1000
-
-# 性能优化
-innodb_buffer_pool_size=256M
-innodb_log_file_size=64M
-innodb_flush_log_at_trx_commit=2
-
-# 查询缓存（MySQL 8.0 已移除，可忽略）
-# query_cache_size=32M
-
-# 慢查询日志
-slow_query_log=1
-slow_query_log_file=/var/lib/mysql/slow.log
-long_query_time=2
-
-# 二进制日志
-log_bin=mysql-bin
-binlog_format=ROW
-expire_logs_days=7
-
-# 时区
-default-time-zone='+08:00'
-
-[mysql]
-default-character-set=utf8mb4
-
-[client]
-default-character-set=utf8mb4
-```
-
-### Docker Compose 常用命令
-
-#### 基础操作
+### Docker 命令
 ```bash
 # 启动所有服务
 docker-compose up -d
 
-# 启动指定服务
-docker-compose up -d mysql redis
-
 # 停止所有服务
 docker-compose stop
-
-# 停止并删除所有容器
-docker-compose down
-
-# 停止并删除所有容器、网络、数据卷
-docker-compose down -v
-
-# 重启服务
-docker-compose restart
 
 # 查看服务状态
 docker-compose ps
 
 # 查看服务日志
-docker-compose logs -f
-
-# 查看指定服务日志
 docker-compose logs -f price-monitor
 
-# 查看实时日志（最后100行）
-docker-compose logs --tail=100 -f price-monitor
-```
-
-#### 构建和更新
-```bash
-# 构建镜像
-docker-compose build
-
-# 构建指定服务
-docker-compose build price-monitor
-
-# 重新构建并启动
-docker-compose up -d --build
-
-# 拉取最新镜像
-docker-compose pull
-```
-
-#### 数据库操作
-```bash
 # 进入 MySQL 容器
-docker exec -it arbitragex-mysql bash
-
-# 连接 MySQL
 docker exec -it arbitragex-mysql mysql -uarbitragex_user -pArbitrageX2025! arbitragex
-
-# 执行 SQL 文件
-docker exec -i arbitragex-mysql mysql -uarbitragex_user -pArbitrageX2025! arbitragex < scripts/mysql/01-init-database.sql
-
-# 备份数据库
-docker exec arbitragex-mysql mysqldump -uarbitragex_user -pArbitrageX2025! arbitragex > backup.sql
-
-# 恢复数据库
-docker exec -i arbitragex-mysql mysql -uarbitragex_user -pArbitrageX2025! arbitragex < backup.sql
 ```
 
-#### 容器管理
+### goctl 命令
 ```bash
-# 查看容器资源使用情况
-docker stats
-
-# 查看容器详细信息
-docker inspect arbitragex-price-monitor
-
-# 进入运行中的容器
-docker exec -it arbitragex-price-monitor sh
-
-# 复制文件到容器
-docker cp config/config.yaml arbitragex-price-monitor:/app/config/
-
-# 从容器复制文件
-docker cp arbitragex-price-monitor:/app/logs/price-monitor.log ./
-```
-
-### 数据库 Model 生成
-
-#### 使用 goctl 生成 Model
-```bash
-# 生成所有表的 Model 代码
-goctl model mysql datasource -url="arbitragex_user:ArbitrageX2025!@tcp(localhost:3306)/arbitragex" -table="*" -dir="./model"
-
-# 生成指定表的 Model
-goctl model mysql datasource -url="arbitragex_user:ArbitrageX2025!@tcp(localhost:3306)/arbitragex" -table="trade_executions,orders" -dir="./model"
-
-# 使用缓存
-goctl model mysql datasource -url="arbitragex_user:ArbitrageX2025!@tcp(localhost:3306)/arbitragex" -table="*" -dir="./model" -c=true
-
-# 生成带 Redis 缓存的 Model
-goctl model mysql datasource -url="arbitragex_user:ArbitrageX2025!@tcp(localhost:3306)/arbitragex" -table="trade_executions" -dir="./model" --cache
-```
-
-### 环境变量配置
-
-#### .env 文件（docker-compose 使用）
-```env
-# 环境标识
-ENV=production
-
-# MySQL 配置
-MYSQL_HOST=mysql
-MYSQL_PORT=3306
-MYSQL_DATABASE=arbitragex
-MYSQL_USER=arbitragex_user
-MYSQL_PASSWORD=ArbitrageX2025!
-
-# Redis 配置
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_PASSWORD=
-
-# 服务端口
-PRICE_MONITOR_PORT=8888
-ENGINE_PORT=8889
-TRADE_PORT=8890
-
-# 日志级别
-LOG_LEVEL=info
-```
-
-### 健康检查配置
-
-#### 应用健康检查（Go 代码）
-```go
-// internal/handler/healthcheckhandler.go
-package handler
-
-import (
-    "net/http"
-    "github.com/zeromicro/go-zero/rest/httpx"
-)
-
-type HealthCheckHandler struct{}
-
-func NewHealthCheckHandler() *HealthCheckHandler {
-    return &HealthCheckHandler{}
-}
-
-func (h *HealthCheckHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
-    // 检查数据库连接
-    // 检查 Redis 连接
-    // 检查其他依赖服务
-
-    httpx.OkJson(w, map[string]interface{}{
-        "status": "healthy",
-        "timestamp": time.Now().Unix(),
-    })
-}
-```
-
-#### docker-compose.yml 中添加健康检查
-```yaml
-healthcheck:
-  test: ["CMD", "wget", "-q", "--spider", "http://localhost:8888/health"]
-  interval: 30s
-  timeout: 10s
-  retries: 3
-  start_period: 40s
-```
-
-### 日志管理
-
-#### 日志卷挂载
-```yaml
-volumes:
-  # 挂载日志目录
-  - ./logs:/app/logs
-
-  # 日志轮转配置
-  - ./config/logrotate.conf:/etc/logrotate.conf
-```
-
-#### logrotate.conf 配置
-```
-/app/logs/*.log {
-    daily
-    rotate 7
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0644 root root
-}
-```
-
-### 数据备份策略
-
-#### 自动备份脚本
-```bash
-#!/bin/bash
-# scripts/backup.sh
-
-BACKUP_DIR="./backups"
-DATE=$(date +%Y%m%d_%H%M%S)
-BACKUP_FILE="arbitragex_${DATE}.sql"
-
-mkdir -p ${BACKUP_DIR}
-
-# 备份数据库
-docker exec arbitragex-mysql mysqldump \
-  -uarbitragex_user \
-  -pArbitrageX2025! \
-  arbitragex > ${BACKUP_DIR}/${BACKUP_FILE}
-
-# 压缩备份文件
-gzip ${BACKUP_DIR}/${BACKUP_FILE}
-
-# 删除 7 天前的备份
-find ${BACKUP_DIR} -name "*.gz" -mtime +7 -delete
-
-echo "Backup completed: ${BACKUP_FILE}.gz"
-```
-
-#### 定时备份（crontab）
-```bash
-# 每天凌晨 2 点执行备份
-0 2 * * * /path/to/scripts/backup.sh >> /var/log/arbitragex-backup.log 2>&1
-```
-
-### Docker 部署检查清单
-
-部署前检查：
-- [ ] Docker 和 Docker Compose 已安装
-- [ ] 配置文件已准备（config.yaml, secrets.yaml）
-- [ ] 敏感信息已正确配置
-- [ ] MySQL 初始化脚本已准备
-- [ ] 数据目录已创建并设置正确权限
-- [ ] 日志目录已创建
-- [ ] 网络端口未被占用
-
-部署后检查：
-- [ ] 所有容器正常运行（docker-compose ps）
-- [ ] 数据库连接正常
-- [ ] Redis 连接正常（如使用）
-- [ ] 应用日志无错误
-- [ ] 健康检查接口返回正常
-- [ ] 各服务之间可以正常通信
-
-### 故障排查
-
-#### 常见问题
-
-1. **容器启动失败**
-```bash
-# 查看容器日志
-docker-compose logs <service_name>
-
-# 查看容器详细状态
-docker inspect <container_id>
-```
-
-2. **数据库连接失败**
-```bash
-# 检查 MySQL 容器状态
-docker-compose ps mysql
-
-# 测试数据库连接
-docker exec -it arbitragex-mysql mysql -uarbitragex_user -pArbitrageX2025! arbitragex
-
-# 检查网络连接
-docker network inspect arbitragex_arbitragex-network
-```
-
-3. **权限问题**
-```bash
-# 修改文件权限
-chmod -R 755 ./config
-chmod -R 755 ./logs
-
-# 修改数据目录权限
-chown -R 999:999 ./data/mysql  # MySQL 容器使用 UID 999
-```
-
-### 性能优化建议
-
-1. **容器资源限制**
-```yaml
-services:
-  price-monitor:
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 512M
-        reservations:
-          cpus: '0.5'
-          memory: 256M
-```
-
-2. **MySQL 优化**
-- 调整 innodb_buffer_pool_size
-- 启用查询缓存（根据实际情况）
-- 定期清理过期数据
-
-3. **日志管理**
-- 使用异步日志
-- 定期归档和清理日志
-- 避免在生产环境使用 DEBUG 级别
-
-## go-zero 框架使用
-
-### API 定义（如需要）
-```api
-// 内部 API（如果需要 HTTP 接口）
-type (
-    // 获取系统状态
-    GetStatusRequest {
-    }
-    GetStatusResponse {
-        Status   string `json:"status"`
-        Uptime   int64  `json:"uptime"`
-    }
-)
-
-service ArbitrageX-API {
-    @handler getStatus
-    get /status(GetStatusRequest) returns(GetStatusResponse)
-}
-```
-
-### 代码生成
-```bash
-# 生成 API 代码
+# 生成 API 服务代码
 goctl api go -api api/arbitragex.api -dir .
 
-# 生成 RPC 代码
-goctl rpc template -o arbitragex.proto
-goctl rpc protoc arbitragex.proto --go_out=./types --go-grpc_out=./types
+# 生成 Model 代码
+goctl model mysql datasource -url="user:password@tcp(127.0.0.1:3306)/database" -table="*" -dir="./model"
 ```
 
-## Git 提交规范
+---
+
+## 7. 项目特定规范
+
+### 搬砖业务相关
+
+1. **价格处理**
+   - 所有价格使用 `float64` 存储
+   - 金额计算使用整数（USDT 精确到分）
+   ```go
+   // ✓ 正确
+   amountUsdt := int64(100.50 * 100)  // 10050 分
+   // ✗ 错误
+   amountUsdt := 100.50
+   ```
+
+2. **交易对格式**
+   - 统一使用 `BTC/USDT` 格式（斜杠分隔）
+   - 内部转换各交易所格式
+
+3. **时间处理**
+   - 统一使用毫秒时间戳
+   - 使用 UTC 时区
+
+4. **错误处理**
+   - 所有关键操作必须处理错误
+   - 交易相关错误需要记录详细日志
+
+### 安全相关
+
+1. **敏感信息**
+   - API 密钥必须加密存储
+   - 日志中脱敏显示
+   ```go
+   // ✓ 正确
+   logger.Info("API key", log.String("key", maskAPIKey(key)))
+   // ✗ 错误
+   logger.Info("API key", log.String("key", key))
+   ```
+
+2. **资金安全**
+   - 严格遵循风险控制规则
+   - 余额不足时不执行交易
+   - 大额交易需要分批
+
+### 性能指标
+- 价格更新延迟 ≤ 100ms
+- 套利识别延迟 ≤ 50ms
+- 订单下单延迟 ≤ 100ms
+- CPU 使用率 ≤ 70%
+- 内存使用 ≤ 2GB
+
+---
+
+## 8. Git 提交规范
 
 ### Commit Message 格式
 ```
@@ -1537,206 +1174,43 @@ feat(price): 实现价格监控模块
 Closes #123
 ```
 
-## 项目特定规范
+---
 
-### 搬砖业务相关
+## 9. 参考文档索引
 
-1. **价格处理**
-   - 所有价格使用 `float64` 存储
-   - 注意精度问题，金额计算使用整数（USDT 精确到分）
-   ```go
-   // ✓ 正确：金额计算使用整数
-   amountUsdt := int64(100.50 * 100)  // 10050 分
+### 技术栈文档
+- **后端技术栈**: `docs/design/TechStack/Backend_TechStack.md` (764 行)
+- **数据库技术栈**: `docs/design/TechStack/Database_TechStack.md` (411 行)
+- **区块链技术栈**: `docs/design/TechStack/Blockchain_TechStack.md` (425 行)
 
-   // ✗ 错误：直接用 float64 计算金额
-   amountUsdt := 100.50
-   ```
+### 设计文档
+- **系统架构**: `docs/design/Architecture/System_Architecture.md`
+- **模块结构**: `docs/design/Architecture/Module_Structure.md`
+- **数据库设计**: `docs/design/Database/Schema_Design.md`
+- **数据访问层**: `docs/design/Database/Data_Access_Layer.md`
 
-2. **交易对格式**
-   - 统一使用 `BTC/USDT` 格式（斜杠分隔）
-   - 内部转换各交易所格式
+### 部署文档
+- **Docker 部署**: `docs/design/Deployment/Docker_Deployment.md` (700 行)
+- **生产环境部署**: `docs/design/Deployment/Production_Deployment.md` (750 行)
+- **监控指标**: `docs/design/Monitoring/Metrics_Design.md` (600 行)
+- **告警策略**: `docs/design/Monitoring/Alerting_Strategy.md` (550 行)
 
-3. **时间处理**
-   - 统一使用毫秒时间戳
-   - 使用 UTC 时区
+### 开发文档
+- **并行开发框架**: `docs/development/PARALLEL_DEVELOPMENT.md`
+- **任务恢复机制**: `docs/development/TASK_RECOVERY.md`
+- **代码规范**: `docs/development/CODING_STANDARDS.md` (待创建)
+- **配置文件设计**: `docs/config/config_design.md` (v1.1, 已更新 MySQL + go-zero)
 
-4. **错误处理**
-   - 所有关键操作必须处理错误
-   - 交易相关错误需要记录详细日志
+### 外部资源
+- [go-zero 官方文档](https://go-zero.dev/en/docs/concepts/overview)
+- [go-zero GitHub](https://github.com/zeromicro/go-zero)
+- [go-zero-looklook 最佳实践](https://github.com/Mikaelemmmm/go-zero-looklook)
+- [MySQL 8.0 官方文档](https://dev.mysql.com/doc/refman/8.0/en/)
+- [Docker 官方文档](https://docs.docker.com/)
 
-### 安全相关
+---
 
-1. **敏感信息**
-   - API 密钥必须加密存储
-   - 日志中脱敏显示
-   ```go
-   // ✓ 正确：日志中脱敏
-   logger.Info("API key", log.String("key", maskAPIKey(key)))
-
-   // ✗ 错误：直接输出完整密钥
-   logger.Info("API key", log.String("key", key))
-   ```
-
-2. **资金安全**
-   - 严格遵循风险控制规则
-   - 余额不足时不执行交易
-   - 大额交易需要分批
-
-## 常用命令
-
-### 开发命令
-```bash
-# 格式化代码
-go fmt ./...
-goimports -w .
-
-# 运行测试
-go test -v ./...
-go test -cover ./...
-
-# 代码检查
-golangci-lint run
-
-# 生成依赖
-go mod tidy
-go mod vendor
-```
-
-### 构建和运行
-```bash
-# 构建
-go build -o bin/arbitragex cmd/arbitragex/main.go
-
-# 运行
-./bin/arbitragex -config config/config.yaml -env prod
-
-# 使用 make
-make build
-make run
-make test
-```
-
-## 开发流程
-
-### 新功能开发
-1. 阅读相关文档（需求、设计）
-2. 创建功能分支
-   ```bash
-   git checkout -b feature/price-monitor
-   ```
-3. 编写代码和测试
-4. 运行测试确保通过
-5. 提交代码
-   ```bash
-   git add .
-   git commit -m "feat(price): 实现价格监控功能"
-   ```
-6. 推送到远程
-   ```bash
-   git push origin feature/price-monitor
-   ```
-
-### Bug 修复
-1. 定位问题
-2. 编写复现用例
-3. 修复 Bug
-4. 添加测试防止回归
-5. 提交修复
-
-## 代码审查清单
-
-提交代码前检查：
-
-- [ ] 代码已通过 `gofmt` 格式化
-- [ ] 所有公开 API 有清晰的中文注释
-- [ ] 核心逻辑有对应的单元测试
-- [ ] 测试覆盖率符合要求
-- [ ] 没有硬编码的配置值
-- [ ] 错误处理完善，不忽略错误
-- [ ] 日志记录合理，使用结构化日志
-- [ ] 没有明显的性能问题
-- [ ] 敏感信息不暴露
-- [ ] Git 提交信息符合规范
-
-## 最佳实践
-
-### Go 语言
-1. 优先使用 context.Context 进行超时控制
-2. 使用 defer 确保资源释放
-3. 错误处理要明确
-4. 使用 channel 进行并发通信
-5. 避免全局变量
-
-### 搬砖系统
-1. 所有加密操作使用成熟库
-2. 私钥安全存储
-3. 交易处理考虑原子性和幂等性
-4. 关键操作有审计日志
-5. 充分测试边界和并发场景
-
-## 性能优化
-
-### 优化建议
-1. **并发处理**: 使用 Goroutine 池
-2. **数据缓存**: 热点数据内存缓存
-3. **连接复用**: HTTP/WebSocket 连接池
-4. **减少分配**: 使用 sync.Pool 对象池
-5. **批量处理**: 批量获取价格、批量下单
-
-### 性能指标
-- 价格更新延迟 ≤ 100ms
-- 套利识别延迟 ≤ 50ms
-- 订单下单延迟 ≤ 100ms
-- CPU 使用率 ≤ 70%
-- 内存使用 ≤ 2GB
-
-## 调试技巧
-
-### 日志调试
-```go
-// 使用结构化日志
-logger.Debug("processing order",
-    log.String("order_id", order.ID),
-    log.String("symbol", order.Symbol),
-    log.Float64("price", order.Price))
-
-// 使用字段复用
-logger.Debug("processing order",
-    log.Any("order", order))
-```
-
-### 性能分析
-```bash
-# 启用 pprof
-go tool pprof http://localhost:6060/debug/pprof/profile
-
-# 查看 Goroutine
-go tool pprof http://localhost:6060/debug/pprof/goroutine
-```
-
-## 文档维护
-
-- 代码变更时同步更新文档
-- 新功能添加使用示例
-- 重要决策记录在文档中
-- 保持文档的准确性
-
-## 通用配置（与个人偏好一致）
-
-### 代码输出要求
-1. **必须写上清晰的注释**（中文）
-2. **必须设计相应的单元测试用例**
-3. 遵守良好的命名规范
-4. 遵守格式规范
-5. Git 提交信息规范
-
-### 工作方式
-- 优先查看项目文档
-- 不确定的地方先问清楚再实现
-- 重要功能先讨论设计方案
-- 代码质量优于开发速度
-
-## 联系方式
+## 10. 联系方式
 
 如有问题或建议，请：
 1. 查阅项目文档
@@ -1745,5 +1219,65 @@ go tool pprof http://localhost:6060/debug/pprof/goroutine
 
 ---
 
-**最后更新**: 2026-01-06（添加 go-zero v1.9.4 最佳实践 + Docker 部署 + MySQL 数据库配置）
+**文档版本**: v2.1.0 (精简版)
+**完整版**: `CLAUDE_FULL.md` (2372 行，包含详细教程)
+**最后更新**: 2026-01-08
 **维护人**: yangyangyang
+
+---
+
+## 附录：快速参考
+
+### go-zero 快速参考
+
+**项目初始化**：
+```bash
+# 创建 API 服务
+goctl api init -o api/arbitragex.api
+
+# 生成代码
+goctl api go -api api/arbitragex.api -dir .
+
+# 生成 Model
+goctl model mysql datasource -url="user:password@tcp(localhost:3306)/arbitragex" -table="*" -dir="./model"
+```
+
+**配置结构**：
+```go
+type Config struct {
+    rest.RestConf
+    Mysql struct {
+        DataSource string
+    }
+    Redis struct {
+        Host string
+        Type int
+    }
+}
+```
+
+### Docker 快速参考
+
+**启动服务**：
+```bash
+# 启动所有服务
+docker-compose up -d
+
+# 重启单个服务
+docker-compose restart price-monitor
+
+# 查看日志
+docker-compose logs -f price-monitor
+```
+
+**数据库操作**：
+```bash
+# 连接 MySQL
+docker exec -it arbitragex-mysql mysql -uarbitragex_user -pArbitrageX2025! arbitragex
+
+# 备份数据库
+docker exec arbitragex-mysql mysqldump -uarbitragex_user -pArbitrageX2025! arbitragex > backup.sql
+
+# 恢复数据库
+docker exec -i arbitragex-mysql mysql -uarbitragex_user -pArbitrageX2025! arbitragex < backup.sql
+```
