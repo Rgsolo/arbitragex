@@ -108,27 +108,48 @@
 
 **问题币种**: PEPE、SHIB、FLOKI、BONK、DOGE
 
-**可能原因**:
-1. **符号格式不匹配**:
-   - 当前使用: `PEPEUSDT` (移除斜杠)
-   - 实际可能需要: `PEPEUSDT` ✅ (已正确)
-   - 或者: `PEPEUSDT` 可能在 Binance 上不存在
+**根本原因**:
+`formatBinanceSymbol` 函数使用固定长度分割符号（3+5 格式），导致 4 字符基础币被错误分割：
+- PEPEUSDT → PEP/EUSDT ❌
+- SHIBUSDT → SHI/BUSDT ❌
+- DOGEUSDT → DOG/EUSDT ❌
+- BONKUSDT → BON/KUSDT ❌
 
-2. **交易对不可用**:
-   - 这些币种可能在 Binance USDT 市场暂停交易
-   - 或者需要使用其他交易对（如 BTC、BNB）
+**修复方案**:
+重写 `formatBinanceSymbol` 函数，优先匹配常见报价币：
+```go
+// 常见报价币（按长度降序排列，优先匹配更长的）
+quoteCurrencies := []string{
+    "USDT", "USDC", "BUSD",  // 稳定币（4字符）
+    "BTC", "ETH", "BNB",     // 主流币（3字符）
+}
 
-3. **API 权限**:
-   - 公开 API 可能不支持这些小币种
-   - 需要注册 API Key 才能访问
-
-**解决方案**:
-```bash
-# 1. 检查 Binance 官方文档，确认这些币种的符号
-# 2. 尝试使用 Binance API 测试工具验证
-# 3. 考虑使用 Binance 的其他端点
-# 4. 添加错误日志，记录 HTTP 响应状态码
+// 尝试匹配报价币
+for _, quote := range quoteCurrencies {
+    if strings.HasSuffix(symbol, quote) {
+        base := symbol[:len(symbol)-len(quote)]
+        if len(base) > 0 {
+            return base + "/" + quote
+        }
+    }
+}
 ```
+
+**修复结果**:
+✅ 所有币种数据获取成功（100%）
+```
+PEPE/USDT: Binance ✅ | OKX ✅
+SHIB/USDT: Binance ✅ | OKX ✅
+FLOKI/USDT: Binance ✅ | OKX ✅
+BONK/USDT: Binance ✅ | OKX ✅
+WIF/USDT:  Binance ✅ | OKX ✅
+DOGE/USDT: Binance ✅ | OKX ✅
+ADA/USDT:  Binance ✅ | OKX ✅
+DOT/USDT:  Binance ✅ | OKX ✅
+```
+
+**修复时间**: 2026-01-08 16:03
+**提交**: 9e78187
 
 ### 3. OKX 小币种价差极小
 
@@ -199,9 +220,11 @@
 
 | 指标 | OKX | Binance | 评估 |
 |------|-----|---------|------|
-| 数据完整性 | 8/8 (100%) | 3/8 (37.5%) | OKX 优于 Binance |
+| 数据完整性 | 8/8 (100%) | 8/8 (100%) ✅ | 两者相同 |
 | 价格稳定性 | 稳定 | 稳定 | 两者都稳定 |
 | 更新延迟 | < 1s | < 1s | 两者都很快 |
+
+**更新说明**: 修复 Binance 符号格式解析问题后，数据完整性从 37.5% 提升到 100%
 
 ---
 
@@ -210,7 +233,7 @@
 ### 结论
 
 1. ✅ **监控系统功能正常**
-   - 价格获取稳定
+   - 价格获取稳定（Binance 和 OKX 都是 100%）
    - 套利识别正确
    - 统计功能完善
 
@@ -219,19 +242,19 @@
    - 小币种: 价差 < 0.1%
    - **远低于交易成本 0.3%**
 
-3. ⚠️ **Binance 小币种数据需要修复**
-   - 5/8 币种无法获取数据
-   - 需要调试符号格式问题
+3. ✅ **Binance 小币种数据问题已修复**
+   - 修复符号格式解析函数
+   - 所有币种数据获取成功（8/8 = 100%）
 
 ### 建议
 
 #### 短期（1-2天）
 
-1. **修复 Binance 小币种数据**
-   - [ ] 检查 Binance API 文档
-   - [ ] 验证符号格式
-   - [ ] 添加错误日志
-   - [ ] 测试其他端点
+1. ✅ **修复 Binance 小币种数据** - 已完成
+   - [x] 检查 Binance API 文档
+   - [x] 验证符号格式
+   - [x] 修复 formatBinanceSymbol 函数
+   - [x] 测试所有币种
 
 2. **继续监控验证**
    - [ ] 运行更长时间监控（1-2 小时）
@@ -309,19 +332,15 @@
 
 ### 立即执行
 
-1. **修复 Binance 小币种数据**
-   ```bash
-   # 检查 Binance API 文档
-   curl "https://api.binance.com/api/v3/ticker/bookTicker?symbol=PEPEUSDT"
-
-   # 如果失败，尝试其他格式
-   curl "https://api.binance.com/api/v3/ticker/bookTicker?symbol=PEPEUSDT"
-   ```
+1. ✅ **修复 Binance 小币种数据** - 已完成
+   - 已修复 `formatBinanceSymbol` 函数
+   - 所有币种数据获取成功（100%）
+   - 提交: 9e78187
 
 2. **运行长时间监控**
    ```bash
    # 运行 1 小时监控
-   timeout 3600 ./bin/monitor_small_caps
+   ./bin/monitor_small_caps
    ```
 
 ### 后续计划
