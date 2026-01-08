@@ -433,9 +433,9 @@ func NewBinanceRESTClient(baseURL string) *BinanceRESTClient {
 	}
 }
 
-// GetTicker 获取单个交易对价格
+// GetTicker 获取单个交易对价格（使用 bookTicker 端点获取买卖价）
 func (c *BinanceRESTClient) GetTicker(ctx context.Context, symbol string) (*Ticker, error) {
-	url := fmt.Sprintf("%s/api/v3/ticker/price?symbol=%s", c.baseURL, strings.ToUpper(symbol))
+	url := fmt.Sprintf("%s/api/v3/ticker/bookTicker?symbol=%s", c.baseURL, strings.ToUpper(symbol))
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -453,19 +453,20 @@ func (c *BinanceRESTClient) GetTicker(ctx context.Context, symbol string) (*Tick
 	}
 
 	var result struct {
-		Symbol string `json:"symbol"`
-		Price  string `json:"price"`
-		Bid    string `json:"bidPrice"`
-		Ask    string `json:"askPrice"`
+		Symbol   string `json:"symbol"`
+		BidPrice string `json:"bidPrice"`
+		AskPrice string `json:"askPrice"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
 
-	price := parseFloat(result.Price)
-	bid := parseFloat(result.Bid)
-	ask := parseFloat(result.Ask)
+	bid := parseFloat(result.BidPrice)
+	ask := parseFloat(result.AskPrice)
+
+	// 计算中间价作为最新价格
+	price := (bid + ask) / 2
 
 	return &Ticker{
 		Exchange:  "Binance",
