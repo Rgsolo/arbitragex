@@ -1281,3 +1281,284 @@ docker exec arbitragex-mysql mysqldump -uarbitragex_user -pArbitrageX2025! arbit
 # 恢复数据库
 docker exec -i arbitragex-mysql mysql -uarbitragex_user -pArbitrageX2025! arbitragex < backup.sql
 ```
+
+---
+
+## 💡 经验积累与最佳实践
+
+### 目录结构重构经验（2026-01-08）
+
+#### 问题 1：目录结构不符合 go-zero 规范
+
+**发现的问题**：
+- ❌ 原结构：所有服务在 `cmd/` 目录下
+- ❌ 不符合 go-zero 官方推荐的工程维度结构
+- ❌ 与 go-zero-looklook 最佳实践不一致
+
+**正确的结构**：
+```
+ArbitrageX/
+├── restful/          # HTTP 服务（go-zero 官方推荐）
+│   ├── price/
+│   ├── engine/
+│   └── trade/
+├── service/          # RPC 服务（未来扩展）
+├── job/              # 定时任务（未来扩展）
+└── consumer/         # 消息消费（未来扩展）
+```
+
+**重构步骤**：
+1. 创建 `restful/` 目录
+2. 移动服务：`mv cmd/price restful/`（等）
+3. 更新 Makefile 所有路径
+4. 更新验证脚本所有路径
+5. 批量更新 import 路径
+6. 删除重复文件（goctl 生成的额外 main.go）
+7. 验证编译
+
+**参考**：
+- [go-zero 官方项目结构](https://go-zero.dev/docs/concepts/layout)
+- [go-zero-looklook 项目](https://github.com/Mikaelemmmm/go-zero-looklook)
+
+---
+
+### Go 依赖管理经验（2026-01-08）
+
+#### 问题 2：genproto 版本冲突
+
+**错误信息**：
+```
+go: google.golang.org/genproto@v0.0.0-20221024183307-1bcac889d1e3: invalid version: unknown revision 1bcac889d1e3
+```
+
+**根本原因**：
+- `go.mod` 中引用了已删除的 genproto 版本
+- 该版本的 commit hash 已从仓库中删除
+
+**解决方案**：
+```bash
+# 1. 从 go.mod 中手动删除无效版本
+# 编辑 go.mod，删除这一行：
+# google.golang.org/genproto v0.0.0-20221024183307-1bcac889d1e3
+
+# 2. 运行 go mod tidy 自动选择新版本
+go mod tidy
+
+# 成功后会自动选择有效版本：
+# google.golang.org/genproto/googleapis/api v0.0.0-20240711142825-46eb208f015d
+# google.golang.org/genproto/googleapis/rpc v0.0.0-20240701130421-f6361c86f094
+```
+
+**预防措施**：
+- ✅ 定期运行 `go mod tidy` 保持依赖更新
+- ✅ 使用 `go get -u` 更新依赖到最新稳定版本
+- ✅ 不要在 `go.mod` 中手动指定伪版本（pseudo-version）
+
+---
+
+### 批量更新代码经验（2026-01-08）
+
+#### 问题 3：重构后 import 路径全部错误
+
+**问题规模**：
+- 3 个服务 × 多个文件 = 50+ 个文件需要更新
+- 手动更新耗时且容易出错
+
+**解决方案 - 使用 sed 批量替换**：
+```bash
+# 批量替换 import 路径
+find restful/ -name "*.go" -type f -exec sed -i '' 's|arbitragex/cmd/price/|arbitragex/restful/price/|g' {} \;
+find restful/ -name "*.go" -type f -exec sed -i '' 's|arbitragex/cmd/engine/|arbitragex/restful/engine/|g' {} \;
+find restful/ -name "*.go" -type f -exec sed -i '' 's|arbitragex/cmd/trade/|arbitragex/restful/trade/|g' {} \;
+```
+
+**注意事项**：
+- ⚠️ macOS 使用 `sed -i ''`，Linux 使用 `sed -i`
+- ⚠️ 使用 `|` 作为分隔符而非 `/`，避免路径中的 `/` 冲突
+- ✅ 先用 `grep` 查找确认，再批量替换
+- ✅ 替换后立即编译验证
+
+**其他批量操作工具**：
+- `find + xargs`：更灵活的批量操作
+- `grep -r + sed`：基于搜索结果批量替换
+- IDE 全局替换：适合有图形界面的情况
+
+---
+
+#### 问题 4：goctl 生成重复的 main 函数
+
+**问题现象**：
+```
+restful/price/price.go:18:5: configFile redeclared in this block
+restful/price/main.go:15:5: other declaration of configFile
+```
+
+**原因**：
+- goctl 生成了 `main.go` 和 `price.go`
+- 两个文件都在 `package main` 中
+- 都定义了 `main()` 函数和 `configFile` 变量
+
+**解决方案**：
+```bash
+# 删除 goctl 生成的额外文件
+rm -f restful/price/price.go
+rm -f restful/engine/engine.go
+rm -f restful/trade/trade.go
+```
+
+**预防措施**：
+- ✅ 使用 `goctl api go` 时，检查是否生成了重复文件
+- ✅ 如果已存在 `main.go`，goctl 可能会生成额外的 main 文件
+- ✅ 保留自己编写的 `main.go`，删除 goctl 生成的
+
+---
+
+### 经验积累机制（自动学习）
+
+#### 建立持续改进机制
+
+**核心思想**：
+> 每次解决问题后，总结经验并写入文档，建立知识库，防止重复犯错。
+
+**实施步骤**：
+
+**1. 问题发现时**
+- ✅ 记录问题的现象和错误信息
+- ✅ 分析问题的根本原因
+- ✅ 尝试多种解决方案
+
+**2. 问题解决后**
+- ✅ 记录最终有效的解决方案
+- ✅ 总结经验教训（DO/DON'T）
+- ✅ 提取可复用的通用经验
+
+**3. 经验文档化**
+- ✅ 将经验写入 CLAUDE.md 或项目文档
+- ✅ 使用清晰的标题和分类
+- ✅ 包含代码示例和命令
+- ✅ 添加参考链接
+
+**4. 定期回顾**
+- ✅ 每个阶段完成后回顾经验
+- ✅ 项目复盘时更新最佳实践
+- ✅ 分享经验给团队成员
+
+**经验文档模板**：
+```markdown
+### [问题名称]（日期）
+
+#### 问题描述
+- **现象**：[具体的错误或问题]
+- **影响**：[对项目的影响]
+- **发现时机**：[何时发现此问题]
+
+#### 根本原因
+[分析为什么会发生此问题]
+
+#### 解决方案
+```bash
+# 具体解决步骤和命令
+[命令示例]
+```
+
+#### 经验教训
+**DO**（应该做的）：
+- ✅ [正确的做法]
+
+**DON'T**（不应该做的）：
+- ❌ [避免的做法]
+
+#### 预防措施
+[如何防止类似问题再次发生]
+
+#### 参考资源
+- [相关文档链接]
+- [GitHub Issue 或讨论]
+```
+
+**自动化建议**：
+- 考虑使用 Git hooks 在提交时检查常见问题
+- 创建脚本自动检测代码质量问题
+- 使用 linter 和 formatter 强制代码规范
+
+---
+
+### 关键经验总结
+
+#### DO（应该做的）
+
+1. **遵循框架最佳实践**
+   - ✅ 使用 goctl 工具生成代码结构
+   - ✅ 采用官方推荐的目录结构（`restful/`）
+   - ✅ API 定义先行（.api 文件）
+
+2. **依赖管理**
+   - ✅ 定期运行 `go mod tidy` 更新依赖
+   - ✅ 及时删除无效的依赖版本
+   - ✅ 使用 Go 1.21+ 和 go-zero v1.9.4+
+
+3. **代码重构**
+   - ✅ 使用批量工具（sed、find）提高效率
+   - ✅ 重构后立即编译验证
+   - ✅ 删除重复和过时的文件
+
+4. **经验积累**
+   - ✅ 解决问题后立即总结经验
+   - ✅ 将通用经验写入文档
+   - ✅ 定期回顾和更新最佳实践
+
+#### DON'T（不应该做的）
+
+1. **违反框架规范**
+   - ❌ 不要手动编写 go-zero 标准结构代码
+   - ❌ 不要使用不符合规范的目录结构
+   - ❌ 不要跳过阶段验证
+
+2. **依赖管理错误**
+   - ❌ 不要手动指定伪版本（pseudo-version）
+   - ❌ 不要忽略依赖版本冲突
+   - ❌ 不要使用过时的依赖版本
+
+3. **低效操作**
+   - ❌ 不要手动逐个文件更新 import 路径
+   - ❌ 不要重复造轮子
+   - ❌ 不要在重构后忘记验证
+
+4. **忽视经验积累**
+   - ❌ 不要重复犯错
+   - ❌ 不要忽视文档更新
+   - ❌ 不要跳过问题总结
+
+---
+
+### 工具和脚本
+
+**批量操作脚本示例**：
+```bash
+# 批量更新 import 路径
+update_imports() {
+    local old_path=$1
+    local new_path=$2
+    find . -name "*.go" -type f -exec sed -i '' "s|$old_path|$new_path|g" {} \;
+}
+
+# 使用示例
+update_imports "arbitragex/cmd/" "arbitragex/restful/"
+
+# 批量删除文件
+cleanup_duplicate_files() {
+    rm -f restful/*/price.go
+    rm -f restful/*/engine.go
+    rm -f restful/*/trade.go
+}
+```
+
+**验证脚本**：
+- `scripts/verify-stage.sh` - 9 步自动验证
+- `Makefile` - `make verify-stage` 快速验证
+
+---
+
+**版本**: v2.3.0
+**最后更新**: 2026-01-08
+**维护人**: yangyangyang
